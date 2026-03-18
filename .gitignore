@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Data & checkpoints
+data/
+checkpoints/
+runs/
+outputs/
+wandb/
+
+# Tile cache
+/tmp/nomad_tile_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Hydra
+.hydra/

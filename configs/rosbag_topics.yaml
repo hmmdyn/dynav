@@ -1,0 +1,157 @@
+# rosbag_topics.yaml
+# Configuration for scripts/extract_rosbag.py
+#
+# Before extracting, inspect your bag to confirm topic names:
+#   ros2 bag info <path/to/bag>
+#
+# Common differences across robot setups:
+#   - Camera: compressed vs raw, different namespace prefixes
+#   - GPS: NavSatFix may be under /gps, /fix, or /navsat/fix
+#   - IMU: Microstrain vs VectorNav vs generic /imu/data
+#   - Odometry: raw wheel odom vs EKF-fused /odometry/filtered
+#
+# Adjust the values below to match your specific bag contents.
+
+# ---------------------------------------------------------------------------
+# topics — ROS2 topic names to extract from the bag
+# ---------------------------------------------------------------------------
+topics:
+
+  # --- Front camera (primary observation) ---
+  front_camera: "/camera_front/color/image_raw"
+  # Alternatives:
+  #   front_camera: "/camera_front/color/image_raw/compressed"   # compressed transport
+  #   front_camera: "/front/rgb/image_raw"                       # alternate Jackal namespace
+  #   front_camera: "/camera/color/image_raw"                    # single-camera setups
+  #   front_camera: "/realsense/color/image_raw"                 # RealSense-specific namespace
+
+  # --- Rear camera (supplemental observation) ---
+  rear_camera: "/camera_rear/color/image_raw"
+  # Alternatives:
+  #   rear_camera: "/camera_rear/color/image_raw/compressed"
+  #   rear_camera: "/rear/rgb/image_raw"
+  #   rear_camera: "/camera_rear/image_raw"
+
+  # --- GPS / GNSS fix ---
+  gps: "/navsat/fix"
+  # Alternatives:
+  #   gps_fix: "/fix"                   # common GPSd bridge
+  #   gps_fix: "/gps/fix"               # Jackal default with UM7 GPS
+  #   gps_fix: "/gps/navsat"
+  #   gps_fix: "/piksi/navsatfix_best_fix"   # Piksi Multi RTK
+
+  # --- IMU ---
+  imu: "/imu/data"
+  # Alternatives (Microstrain GX5 series, common on research Jackals):
+  #   imu: "/microstrain/imu/data"
+  #   imu: "/gx5/imu/data"
+  #   imu: "/imu/data_raw"
+  # VectorNav:
+  #   imu: "/vectornav/IMU"
+  #   imu: "/vn100/imu/data"
+  # Generic:
+  #   imu: "/imu"
+
+  # --- Wheel odometry ---
+  odom: "/odometry/filtered"
+  # Alternatives:
+  #   odom: "/jackal_velocity_controller/odom"   # raw wheel odom from Jackal base
+  #   odom: "/odom"                              # generic raw odom
+  #   odom: "/odometry/wheel"                    # explicit wheel-only odom
+  # Note: /odometry/filtered is the robot_localization EKF output (GPS+IMU+wheel).
+  # Prefer this when available; fall back to raw wheel odom if EKF is not running.
+
+# ---------------------------------------------------------------------------
+# sync — Time synchronization policy
+# ---------------------------------------------------------------------------
+sync:
+
+  # Target camera frame rate (Hz). Used to enforce uniform temporal spacing
+  # when sub-sampling frames from the bag.
+  camera_hz: 10.0
+
+  # Time window (seconds) for selecting past observation frames relative to
+  # the current frame. With camera_hz=10 and past_dt_s=0.5, the two past
+  # frames are drawn from t-0.25s and t-0.5s (or nearest available).
+  past_dt_s: 0.5
+
+  # Maximum allowed time difference (seconds) between a camera timestamp and
+  # the nearest GPS fix. Frames with no GPS fix within this window are dropped.
+  gps_tol_s: 0.5
+
+  # Maximum allowed time difference (seconds) between a camera timestamp and
+  # the nearest IMU message. Used for heading extraction when heading_source
+  # is set to "imu".
+  imu_tol_s: 0.1
+
+  # Minimum robot speed (m/s) required to include a frame in the dataset.
+  # Frames captured while the robot is stationary are excluded to avoid
+  # training on uninformative samples with near-zero waypoint displacement.
+  min_speed_mps: 0.3
+
+# ---------------------------------------------------------------------------
+# map — OSM tile rendering settings
+# ---------------------------------------------------------------------------
+map:
+
+  # Tile server URL template. {z}/{x}/{y} will be substituted at render time.
+  # CartoDB Positron No Labels — clean, low-clutter base map, no text overlays
+  # that would leak semantic information inconsistently.
+  tile_url: "https://cartodb-basemaps-a.global.ssl.fastly.net/light_nolabels/{z}/{x}/{y}.png"
+  # Alternatives:
+  #   tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png"       # standard OSM (has labels)
+  #   tile_url: "https://cartodb-basemaps-a.global.ssl.fastly.net/dark_nolabels/{z}/{x}/{y}.png"  # dark variant
+  #   tile_url: "https://stamen-tiles.a.ssl.fastly.net/toner-lite/{z}/{x}/{y}.png"  # Stamen Toner Lite
+
+  # Local directory for caching downloaded tiles. Prevents re-downloading
+  # the same tile across multiple extraction runs on the same area.
+  tile_cache: "/tmp/nomad_tile_cache"
+
+  # OSM zoom level for tile fetching.
+  # 17 → ~1.2m/pixel at the equator, covers ~300m radius at 512px.
+  # Increase to 18 for finer detail (shorter routes); decrease to 16 for
+  # longer routes covering more ground.
+  tile_zoom: 17
+
+  # Internal render resolution (pixels) before downsampling to output_size.
+  # Rendering at 2× output_size then downsampling with anti-aliasing gives
+  # sharper route overlays compared to rendering directly at output_size.
+  render_size: 512
+
+  # Final map image size (pixels, square) fed to the MapEncoder.
+  # Must match model.map_image_size in the training config (default.yaml).
+  output_size: 224
+
+# ---------------------------------------------------------------------------
+# data — Dataset extraction and labeling parameters
+# ---------------------------------------------------------------------------
+data:
+
+  # Number of future waypoints to label per sample (prediction horizon H).
+  # Must match model.prediction_horizon in default.yaml.
+  horizon: 5
+
+  # Maximum lookahead distance (meters) for waypoint sampling along the
+  # GPS trajectory. Waypoints beyond this distance are clipped and normalized.
+  # Must match data.max_waypoint_distance in default.yaml.
+  max_wp_dist_m: 2.5
+
+  # Desired arc-length spacing (meters) between consecutive waypoints along
+  # the GPS path. Together with horizon and max_wp_dist_m this controls how
+  # far ahead the model is trained to look:
+  #   total_lookahead = horizon * wp_spacing_m  →  5 × 0.5m = 2.5m
+  wp_spacing_m: 0.5
+
+  # Observation image size (pixels, square) for front and rear camera crops.
+  # Must match data.image_size in default.yaml.
+  obs_size: 224
+
+  # Source used to determine robot heading at each sampled frame.
+  #   "imu"  — quaternion from the IMU topic (most accurate heading rate,
+  #             but accumulates drift over long runs)
+  #   "gps"  — bearing computed from consecutive GPS fixes (robust over
+  #             long distances, but noisy at low speed; unusable below
+  #             min_speed_mps)
+  #   "odom" — yaw extracted from the odometry pose quaternion (good for
+  #             short runs with low wheel slip; drifts without EKF fusion)
+  heading_source: "imu"
