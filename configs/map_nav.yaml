@@ -1,0 +1,4 @@
+defaults:
+  - default
+
+# Map Navigation specific overrides (extend default.yaml as needed)
