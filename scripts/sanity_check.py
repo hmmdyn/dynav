@@ -49,8 +49,8 @@ def _build_lean_cfg():
 def run_sanity_check(
     threshold: float = 0.05,
     n_iters: int = 100,
-    lr: float = 1e-2,
-    batch_size: int = 5,
+    lr: float = 1e-4,
+    batch_size: int = 10,
     n_samples: int = 10,
     device_str: str = "cpu",
     verbose: bool = True,
@@ -103,20 +103,24 @@ def run_sanity_check(
     )
 
     # ── Model setup ───────────────────────────────────────────────────────────
-    # Freeze EfficientNet backbone (proj + decoder + head remain trainable,
-    # ~2.3M params) to avoid vanishing gradients through the random-init
-    # deep backbone.
+    # Strategy: freeze EfficientNet backbone, set the model to eval() mode for
+    # stable BatchNorm (running stats = mean 0 / var 1 at init → ~identity),
+    # then re-enable train() only for the lightweight trainable parts
+    # (proj layers, decoder, head).
+    #
+    # Rationale: EfficientNet in train() mode with random-init BatchNorm +
+    # small batch produces high-variance features that saturate tanh on the
+    # first Adam step, stalling training. eval() mode for the backbone gives
+    # deterministic, bounded features.
     model = dynavModel.from_config(cfg).to(device)
     model.freeze_encoders()
+    model.eval()                            # backbone BN uses running stats
 
-    # Zero-initialize the WaypointHead output layer so all initial predictions
-    # are tanh(0)=0.  This avoids tanh saturation (large random logits → ±1
-    # outputs → near-zero gradients) that would stall learning.
-    # Initial L_waypoint from 0-output vs straight-ahead targets ≈ 0.15,
-    # which is well below saturation.
-    with torch.no_grad():
-        model.waypoint_head.net[-1].weight.zero_()
-        model.waypoint_head.net[-1].bias.zero_()
+    # Re-enable train() for the parts we're actually optimizing
+    model.decoder.train()
+    model.waypoint_head.train()
+    model.visual_encoder.proj.train()
+    model.map_encoder.proj.train()
 
     # Only include trainable params in the optimizer
     trainable = [p for p in model.parameters() if p.requires_grad]
@@ -183,8 +187,8 @@ def main() -> None:
         help="Number of gradient update steps (default: 100).",
     )
     parser.add_argument(
-        "--lr", type=float, default=5e-2,
-        help="Adam learning rate (default: 5e-2).",
+        "--lr", type=float, default=1e-4,
+        help="Adam learning rate (default: 1e-4).",
     )
     parser.add_argument(
         "--batch-size", type=int, default=10,
