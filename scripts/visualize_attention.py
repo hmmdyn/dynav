@@ -122,7 +122,7 @@ def visualize(
         out = model(obs, mp, return_attention=not per_head, return_per_head=per_head)
 
     waypoints = out["waypoints"][0].numpy()      # (H, 2) — for title display
-    attn_list = out["attention_weights"]         # List[(1, N_o, 49)] or List[(1, n_heads, N_o, 49)]
+    attn_list = out["attention_weights"]         # List[(1, N_o, 9)] or List[(1, n_heads, N_o, 9)]
 
     if attn_list is None:
         print(
@@ -138,7 +138,7 @@ def visualize(
     wp_str = "  ".join(f"({x:.2f},{y:.2f})" for x, y in waypoints)
 
     if per_head:
-        # attn_list[layer]: (1, n_heads, N_o, 49)
+        # attn_list[layer]: (1, n_heads, N_o, 9)
         n_heads = attn_list[0].shape[1]
         _visualize_per_head(
             fig_title=(
@@ -211,9 +211,9 @@ def _visualize_averaged(
 
         for layer_idx in range(n_layers):
             ax = axes[row, layer_idx + 1]
-            # attn_list[layer_idx]: (1, N_o, 49) — select batch 0, obs row
-            attn_flat = attn_list[layer_idx][0, row]          # (49,)
-            attn_map  = attn_flat.reshape(7, 7).numpy()       # (7, 7)
+            # attn_list[layer_idx]: (1, N_o, 9) — select batch 0, obs row
+            attn_flat = attn_list[layer_idx][0, row]          # (9,)
+            attn_map  = attn_flat.reshape(3, 3).numpy()       # (3, 3)
             im = ax.imshow(attn_map, cmap="hot", vmin=0.0, vmax=attn_map.max())
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
             ax.set_xticks([])
@@ -272,11 +272,11 @@ def _visualize_per_head(
 
         col = 1
         for layer_idx in range(n_layers):
-            # attn_list[layer_idx]: (1, n_heads, N_o, 49)
+            # attn_list[layer_idx]: (1, n_heads, N_o, 9)
             for head_idx in range(n_heads):
                 ax = axes[row, col]
-                attn_flat = attn_list[layer_idx][0, head_idx, row]   # (49,)
-                attn_map  = attn_flat.reshape(7, 7).numpy()           # (7, 7)
+                attn_flat = attn_list[layer_idx][0, head_idx, row]   # (9,)
+                attn_map  = attn_flat.reshape(3, 3).numpy()           # (3, 3)
                 im = ax.imshow(attn_map, cmap="hot", vmin=0.0, vmax=attn_map.max())
                 plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
                 ax.set_xticks([])

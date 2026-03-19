@@ -132,7 +132,7 @@ class CrossAttentionDecoder(nn.Module):
     Example:
         >>> dec = CrossAttentionDecoder(token_dim=256, n_layers=4, n_heads=4, d_ff=512)
         >>> obs = torch.randn(2, 4, 256)
-        >>> mp  = torch.randn(2, 49, 256)
+        >>> mp  = torch.randn(2, 9, 256)
         >>> ctx, attn = dec(obs, mp, return_attention=True)
         >>> ctx.shape    # (2, 256)
         >>> len(attn)    # 4  — one per layer

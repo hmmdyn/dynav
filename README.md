@@ -15,8 +15,8 @@
         │                          │
   VisualEncoder              MapEncoder
   EfficientNet-B0            EfficientNet-B0
-  GAP → Linear(1280, 256)    7×7 공간 유지
-  (B, 4, 256)                (B, 49, 256)
+  GAP → Linear(1280, 256)    3×3 adaptive pool
+  (B, 4, 256)                (B, 9, 256)
         │                          │
         └──────── Decoder ─────────┘
               CrossAttention (기본)
@@ -36,7 +36,7 @@
 | 인코더 | 입력 | 출력 | 특징 |
 |---|---|---|---|
 | VisualEncoder | (B, 4, 3, 224, 224) | (B, 4, 256) | GAP + 학습 가능한 시간적 위치 인코딩 |
-| MapEncoder | (B, 3, 224, 224) | (B, 49, 256) | 7×7 공간 토큰 유지 + 2D 위치 인코딩 |
+| MapEncoder | (B, 3, 224, 224) | (B, 9, 256) | 3×3 adaptive pool + 2D 위치 인코딩 |
 
 ### 손실 함수
 

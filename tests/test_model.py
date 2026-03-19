@@ -64,8 +64,8 @@ class TestForwardShape:
         assert attn is not None
         assert len(attn) == 4
         for i, w in enumerate(attn):
-            assert w.shape == (2, 4, 49), (
-                f"Layer {i}: expected (2, 4, 49), got {tuple(w.shape)}"
+            assert w.shape == (2, 4, 9), (
+                f"Layer {i}: expected (2, 4, 9), got {tuple(w.shape)}"
             )
 
     def test_attention_none_by_default(self, cross_model: DyNavModel) -> None:

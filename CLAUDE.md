@@ -18,7 +18,7 @@ The system consists of two models:
 
 ### Encoders (separate weights, both EfficientNet-B0 based)
 - **VisualEncoder:** Each observation image → EfficientNet-B0 → Global Average Pooling → Linear(1280, 256) → 1 token. 4 images → `obs_tokens ∈ (B, 4, 256)`.
-- **MapEncoder:** Map image → EfficientNet-B0 → Keep 7×7 spatial feature map → Linear(1280, 256) → 49 tokens + 2D positional encoding → `map_tokens ∈ (B, 49, 256)`.
+- **MapEncoder:** Map image → EfficientNet-B0 → AdaptiveAvgPool2d((3,3)) → Linear(1280, 256) → 9 tokens + 2D positional encoding → `map_tokens ∈ (B, 9, 256)`.
   - Positional encoding type is configurable: `"learnable"` (default, `nn.Parameter`) or `"sinusoidal"` (fixed buffer, `_build_2d_sinusoidal_encoding`). Set via `encoder.map_pos_enc`.
 
 ### Decoder (two options, selectable via config)
@@ -48,7 +48,7 @@ Each auxiliary term can be individually disabled via config flags (`enable_direc
 
 ## Key Design Decisions
 
-1. **Map encoder uses spatial tokens (49), visual encoder uses GAP tokens (4).** Map's spatial layout (where the route goes) is critical information that GAP would destroy. Observations need high-level semantics, so GAP suffices.
+1. **Map encoder uses spatial tokens (9), visual encoder uses GAP tokens (4).** Map's spatial layout (where the route goes) is critical information that GAP would destroy. 3×3 adaptive pooling (9 tokens) captures coarse direction (left/center/right) while keeping the obs:map token ratio reasonable (4:9). Observations need high-level semantics, so GAP suffices.
 2. **Q=obs, K/V=map in cross-attention.** "Observations query the map for guidance." The robot's current visual situation asks the map where to go.
 3. **No temporal distance prediction** (unlike ViNT). ViNT's temporal distance is for topological graph reachability, which this model doesn't use. Replaced by direction and progress losses.
 4. **Decoder files are separate** so that cross-attention and self-attention approaches can be compared via config switch (`decoder_type: "cross_attention" | "self_attention"`).
@@ -129,14 +129,14 @@ dynav/
 # model.classifier → Linear(1280, 1000)
 #
 # For VisualEncoder: use features + avgpool → flatten → (B, 1280) → project to (B, d)
-# For MapEncoder: use features only → (B, 1280, 7, 7) → reshape to (B, 49, 1280) → project to (B, 49, d)
+# For MapEncoder: use features only → (B, 1280, 7, 7) → AdaptiveAvgPool2d((3,3)) → (B, 1280, 3, 3) → reshape to (B, 9, 1280) → project to (B, 9, d)
 ```
 
 ### 2D Positional Encoding for Map Tokens
 Map spatial tokens need positional encoding to preserve grid layout. Two options:
 ```python
-# Learnable (default): nn.Parameter(torch.randn(1, 49, d) * 0.02)  — trainable
-# Sinusoidal (fixed):  _build_2d_sinusoidal_encoding(grid_size=7, dim=d)
+# Learnable (default): nn.Parameter(torch.randn(1, 9, d) * 0.02)  — trainable
+# Sinusoidal (fixed):  _build_2d_sinusoidal_encoding(grid_size=3, dim=d)
 #   → splits dim into two halves: first half = row encoding, second = col encoding
 #   → each half = sin+cos at quarter_dim frequency bands
 #   → registered as buffer (not trained)

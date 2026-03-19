@@ -76,12 +76,12 @@ class TestMapEncoder:
     """Tests for MapEncoder."""
 
     def test_output_shape(self, map_encoder: MapEncoder) -> None:
-        """Output shape must be (B, 49, token_dim) = (2, 49, 256)."""
+        """Output shape must be (B, 9, token_dim) = (2, 9, 256)."""
         x = torch.randn(2, 3, 224, 224)  # (B, C, H, W)
         with torch.no_grad():
-            tokens = map_encoder(x)       # (B, 49, token_dim)
-        assert tokens.shape == (2, 49, 256), (
-            f"Expected (2, 49, 256), got {tuple(tokens.shape)}"
+            tokens = map_encoder(x)       # (B, 9, token_dim)
+        assert tokens.shape == (2, 9, 256), (
+            f"Expected (2, 9, 256), got {tuple(tokens.shape)}"
         )
 
     def test_pretrained_weights_loaded(self, map_encoder: MapEncoder) -> None:
@@ -115,23 +115,23 @@ class TestMapEncoderPosEncType:
     """Verify learnable and sinusoidal pos_enc_type options."""
 
     def test_learnable_output_shape(self) -> None:
-        """Learnable pos enc: output must be (B, 49, 256)."""
+        """Learnable pos enc: output must be (B, 9, 256)."""
         enc = MapEncoder(token_dim=256, pretrained=False, pos_enc_type="learnable")
         x = torch.randn(2, 3, 224, 224)
         with torch.no_grad():
             tokens = enc(x)
-        assert tokens.shape == (2, 49, 256), (
-            f"Expected (2, 49, 256), got {tuple(tokens.shape)}"
+        assert tokens.shape == (2, 9, 256), (
+            f"Expected (2, 9, 256), got {tuple(tokens.shape)}"
         )
 
     def test_sinusoidal_output_shape(self) -> None:
-        """Sinusoidal pos enc: output must be (B, 49, 256)."""
+        """Sinusoidal pos enc: output must be (B, 9, 256)."""
         enc = MapEncoder(token_dim=256, pretrained=False, pos_enc_type="sinusoidal")
         x = torch.randn(2, 3, 224, 224)
         with torch.no_grad():
             tokens = enc(x)
-        assert tokens.shape == (2, 49, 256), (
-            f"Expected (2, 49, 256), got {tuple(tokens.shape)}"
+        assert tokens.shape == (2, 9, 256), (
+            f"Expected (2, 9, 256), got {tuple(tokens.shape)}"
         )
 
     def test_learnable_pos_enc_is_parameter(self) -> None:

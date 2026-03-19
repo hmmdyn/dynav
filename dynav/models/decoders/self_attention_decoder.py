@@ -37,7 +37,7 @@ class SelfAttentionDecoder(nn.Module):
     Example:
         >>> dec = SelfAttentionDecoder(token_dim=256, n_obs=4, n_layers=4, n_heads=4, d_ff=512)
         >>> obs = torch.randn(2, 4, 256)
-        >>> mp  = torch.randn(2, 49, 256)
+        >>> mp  = torch.randn(2, 9, 256)
         >>> ctx, _ = dec(obs, mp)
         >>> ctx.shape   # (2, 256)
     """

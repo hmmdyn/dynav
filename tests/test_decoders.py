@@ -17,7 +17,7 @@ from dynav.models.decoders import (
 # ── Common dimensions (match configs/default.yaml) ────────────────────────────
 TOKEN_DIM = 256
 N_OBS = 4
-N_MAP = 49
+N_MAP = 9
 N_LAYERS = 4
 N_HEADS = 4
 D_FF = 512

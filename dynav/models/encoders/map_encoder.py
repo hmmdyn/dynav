@@ -1,8 +1,8 @@
 """Map encoder for OSM-rendered top-down map+path images.
 
 Encodes a single map image via EfficientNet-B0 features (no GAP) to preserve
-spatial layout, then projects the 7×7 feature grid to 49 tokens and adds a
-2D positional encoding (learnable or sinusoidal).
+spatial layout, then downsamples to a 3×3 grid via AdaptiveAvgPool2d, projects
+to 9 tokens, and adds a 2D positional encoding (learnable or sinusoidal).
 """
 
 import torch
@@ -19,7 +19,7 @@ def _build_2d_sinusoidal_encoding(grid_size: int, dim: int) -> torch.Tensor:
     at geometrically spaced frequencies (following ViT/Transformer conventions).
 
     Args:
-        grid_size: Spatial grid side length (7 for EfficientNet-B0).
+        grid_size: Spatial grid side length (3 after adaptive pooling).
         dim: Token embedding dimension. Must be divisible by 4
             (sin+cos for each of 2 axes).
 
@@ -62,10 +62,11 @@ def _build_2d_sinusoidal_encoding(grid_size: int, dim: int) -> torch.Tensor:
 class MapEncoder(nn.Module):
     """Encodes a map+path image into a sequence of spatial token embeddings.
 
-    Unlike VisualEncoder, the spatial 7×7 feature map is kept intact so that
-    the cross-attention decoder can attend to specific map regions (e.g., where
-    the route turns). Each of the 49 spatial locations is projected to token_dim
-    and receives a 2D positional encoding.
+    EfficientNet-B0 features (B, 1280, 7, 7) are downsampled to (B, 1280, 3, 3)
+    via AdaptiveAvgPool2d, giving 9 tokens that capture coarse spatial structure
+    (left / center / right route direction) while keeping the token count low
+    relative to the 4 observation tokens. Each of the 9 spatial locations is
+    projected to token_dim and receives a 2D positional encoding.
 
     Args:
         token_dim: Dimension of output token embeddings (d).
@@ -77,12 +78,12 @@ class MapEncoder(nn.Module):
     Example:
         >>> enc = MapEncoder(token_dim=256)
         >>> x = torch.randn(2, 3, 224, 224)
-        >>> tokens = enc(x)   # (2, 49, 256)
+        >>> tokens = enc(x)   # (2, 9, 256)
     """
 
-    # EfficientNet-B0 spatial output: (B, 1280, 7, 7)
+    # EfficientNet-B0 spatial output: (B, 1280, 7, 7) → pooled to (B, 1280, 3, 3)
     _EFFICIENTNET_FEAT_DIM: int = 1280
-    _SPATIAL_GRID: int = 7          # 7 × 7 = 49 tokens
+    _SPATIAL_GRID: int = 3          # 3 × 3 = 9 tokens
 
     def __init__(
         self,
@@ -93,27 +94,30 @@ class MapEncoder(nn.Module):
         super().__init__()
 
         self.token_dim = token_dim
-        self.n_tokens = self._SPATIAL_GRID ** 2  # 49
+        self.n_tokens = self._SPATIAL_GRID ** 2  # 9
 
         # ── Backbone (features only — no avgpool, no classifier) ───────────────
         weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = efficientnet_b0(weights=weights)
         self.features = backbone.features   # output: (B, 1280, 7, 7)
 
+        # ── Adaptive spatial pooling: 7×7 → 3×3 ──────────────────────────────
+        self.spatial_pool = nn.AdaptiveAvgPool2d((3, 3))
+
         # ── Projection head ───────────────────────────────────────────────────
         self.proj = nn.Linear(self._EFFICIENTNET_FEAT_DIM, token_dim)
 
         # ── 2D positional encoding ─────────────────────────────────────────────
         if pos_enc_type == "learnable":
-            # Trainable parameter — shape (1, 49, token_dim)
+            # Trainable parameter — shape (1, 9, token_dim)
             # Initialized small so early training is not dominated by pos enc
             self.pos_enc_2d = nn.Parameter(
                 torch.randn(1, self.n_tokens, token_dim) * 0.02
             )
         elif pos_enc_type == "sinusoidal":
-            # Fixed buffer — shape (1, 49, token_dim)
+            # Fixed buffer — shape (1, 9, token_dim)
             enc = _build_2d_sinusoidal_encoding(self._SPATIAL_GRID, token_dim)
-            self.register_buffer("pos_enc_2d", enc.unsqueeze(0))  # (1, 49, d)
+            self.register_buffer("pos_enc_2d", enc.unsqueeze(0))  # (1, 9, d)
         else:
             raise ValueError(
                 f"Unknown pos_enc_type '{pos_enc_type}'. "
@@ -129,18 +133,19 @@ class MapEncoder(nn.Module):
             x: Map+path images of shape (B, 3, H, W).
 
         Returns:
-            Spatial token embeddings of shape (B, 49, token_dim).
+            Spatial token embeddings of shape (B, 9, token_dim).
         """
         # x: (B, 3, H, W)
         feat = self.features(x)                             # (B, 1280, 7, 7)
+        feat = self.spatial_pool(feat)                      # (B, 1280, 3, 3)
 
         # Flatten spatial dims → token sequence
-        tokens = rearrange(feat, "b c h w -> b (h w) c")   # (B, 49, 1280)
+        tokens = rearrange(feat, "b c h w -> b (h w) c")   # (B, 9, 1280)
 
-        tokens = self.proj(tokens)                          # (B, 49, token_dim)
+        tokens = self.proj(tokens)                          # (B, 9, token_dim)
 
         # Add 2D positional encoding
-        tokens = tokens + self.pos_enc_2d                   # (B, 49, token_dim)
+        tokens = tokens + self.pos_enc_2d                   # (B, 9, token_dim)
 
         return tokens
 

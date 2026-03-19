@@ -125,7 +125,7 @@ class DyNavModel(nn.Module):
                   — ``None`` otherwise.
         """
         obs_tokens = self.visual_encoder(observations)    # (B, N_obs, d)
-        map_tokens = self.map_encoder(map_image)          # (B, 49, d)
+        map_tokens = self.map_encoder(map_image)          # (B, 9, d)
 
         context, attn_weights = self.decoder(
             obs_tokens, map_tokens,
