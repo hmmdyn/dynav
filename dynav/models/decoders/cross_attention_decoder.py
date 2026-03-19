@@ -69,20 +69,26 @@ class CrossAttentionDecoderBlock(nn.Module):
         obs_tokens: torch.Tensor,
         map_tokens: torch.Tensor,
         return_attention: bool = False,
+        return_per_head: bool = False,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Apply one cross-attention decoder block.
 
         Args:
             obs_tokens: Observation token sequence of shape (B, N_o, d).
             map_tokens: Map spatial token sequence of shape (B, N_m, d).
-            return_attention: If True, return cross-attention weights.
+            return_attention: If True, return head-averaged cross-attention
+                weights of shape (B, N_o, N_m).
+            return_per_head: If True, return per-head cross-attention weights
+                of shape (B, n_heads, N_o, N_m). Takes priority over
+                return_attention when both are True.
 
         Returns:
             Tuple of:
                 - obs_tokens_out: Updated obs tokens of shape (B, N_o, d).
-                - attn_weights: Cross-attention weights of shape
-                  (B, N_o, N_m) if return_attention else None.
-                  Note: nn.MultiheadAttention averages weights over heads.
+                - attn_weights:
+                    - ``(B, n_heads, N_o, N_m)`` if return_per_head,
+                    - ``(B, N_o, N_m)`` if return_attention (head-averaged),
+                    - ``None`` otherwise.
         """
         # ── Sub-layer 1: self-attention ────────────────────────────────────────
         residual = obs_tokens                                          # (B, N_o, d)
@@ -97,8 +103,8 @@ class CrossAttentionDecoderBlock(nn.Module):
             query=x,
             key=map_tokens,
             value=map_tokens,
-            need_weights=return_attention,
-            average_attn_weights=True,     # average over heads → (B, N_o, N_m)
+            need_weights=return_attention or return_per_head,
+            average_attn_weights=not return_per_head,  # False → (B, n_heads, N_o, N_m)
         )                                                              # (B, N_o, d)
         obs_tokens = residual + self.dropout(x)                        # (B, N_o, d)
 
@@ -152,31 +158,41 @@ class CrossAttentionDecoder(nn.Module):
         obs_tokens: torch.Tensor,
         map_tokens: torch.Tensor,
         return_attention: bool = False,
+        return_per_head: bool = False,
     ) -> tuple[torch.Tensor, Optional[list[torch.Tensor]]]:
         """Fuse map context into obs tokens and produce a context vector.
 
         Args:
             obs_tokens: Observation token sequence of shape (B, N_o, d).
             map_tokens: Map spatial token sequence of shape (B, N_m, d).
-            return_attention: If True, collect cross-attention weights from
-                every layer.
+            return_attention: If True, collect head-averaged cross-attention
+                weights from every layer.
+            return_per_head: If True, collect per-head cross-attention weights
+                from every layer. Takes priority over return_attention.
 
         Returns:
             Tuple of:
                 - context: Mean-pooled context vector of shape (B, d).
-                - attn_weights_per_layer: List of (B, N_o, N_m) tensors,
-                  one per layer, if return_attention else None.
+                - attn_weights_per_layer: List of tensors, one per layer:
+                    - ``(B, n_heads, N_o, N_m)`` if return_per_head,
+                    - ``(B, N_o, N_m)`` if return_attention,
+                    - ``None`` if neither.
         """
+        collect = return_attention or return_per_head
         attn_weights_per_layer: Optional[list[torch.Tensor]] = (
-            [] if return_attention else None
+            [] if collect else None
         )
 
         x = obs_tokens  # (B, N_o, d)
         for block in self.blocks:
-            x, attn = block(x, map_tokens, return_attention=return_attention)
+            x, attn = block(
+                x, map_tokens,
+                return_attention=return_attention,
+                return_per_head=return_per_head,
+            )
             # x:    (B, N_o, d)
-            # attn: (B, N_o, N_m) or None
-            if return_attention and attn is not None:
+            # attn: (B, n_heads, N_o, N_m) | (B, N_o, N_m) | None
+            if collect and attn is not None:
                 attn_weights_per_layer.append(attn)  # type: ignore[union-attr]
 
         context = x.mean(dim=1)  # (B, d)

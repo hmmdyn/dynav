@@ -496,7 +496,7 @@ data/
 
 ## 7. 데이터 품질 검증
 
-### 7.1 파이프라인 검증 (DummydynavDataset)
+### 7.1 파이프라인 검증 (DummyDyNavDataset)
 
 실제 데이터 없이 학습 파이프라인이 올바르게 동작하는지 먼저 확인합니다.
 
@@ -518,9 +518,9 @@ python scripts/sanity_check.py
 ### 7.2 데이터셋 로딩 테스트
 
 ```python
-from dynav.data.dataset import dynavDataset
+from dynav.data.dataset import DyNavDataset
 
-ds = dynavDataset("data/", split="train")
+ds = DyNavDataset("data/", split="train")
 print(f"샘플 수: {len(ds)}")
 
 sample = ds[0]
@@ -622,14 +622,14 @@ Phase 3 (실제 환경 평가):
   real 데이터 100% → 최종 성능 평가
 ```
 
-`data.data_dir` 설정에서 여러 데이터 경로를 지원하도록 `dynavDataset`을 확장하거나, `ConcatDataset`을 사용해 혼합합니다:
+`data.data_dir` 설정에서 여러 데이터 경로를 지원하도록 `DyNavDataset`을 확장하거나, `ConcatDataset`을 사용해 혼합합니다:
 
 ```python
 from torch.utils.data import ConcatDataset
-from dynav.data.dataset import dynavDataset
+from dynav.data.dataset import DyNavDataset
 
-sim_ds  = dynavDataset("data/sim_seoul_train", split="train")
-real_ds = dynavDataset("data/real_kaist_train", split="train")
+sim_ds  = DyNavDataset("data/sim_seoul_train", split="train")
+real_ds = DyNavDataset("data/real_kaist_train", split="train")
 mixed   = ConcatDataset([sim_ds, real_ds])
 print(f"총 샘플: {len(mixed)}")
 ```

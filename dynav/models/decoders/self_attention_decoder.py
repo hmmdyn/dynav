@@ -80,6 +80,7 @@ class SelfAttentionDecoder(nn.Module):
         obs_tokens: torch.Tensor,
         map_tokens: torch.Tensor,
         return_attention: bool = False,
+        return_per_head: bool = False,
     ) -> tuple[torch.Tensor, None]:
         """Fuse obs and map tokens via full self-attention and produce a context vector.
 
@@ -93,6 +94,8 @@ class SelfAttentionDecoder(nn.Module):
             return_attention: Accepted for interface compatibility; always returns
                 None because self-attention weights are not exposed by
                 nn.TransformerEncoder without custom hooks.
+            return_per_head: Accepted for interface compatibility; always returns
+                None (same reason as return_attention).
 
         Returns:
             Tuple of:

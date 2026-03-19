@@ -123,11 +123,13 @@ class NavigationLoss(nn.Module):
             + λ_progress  * L_progress
             + λ_smooth    * L_smooth
 
-    Lambda values are read from ``cfg.loss`` (OmegaConf DictConfig).
+    Lambda values and enable flags are read from ``cfg.loss`` (OmegaConf DictConfig).
 
     Args:
         cfg: OmegaConf DictConfig with a ``loss`` sub-key containing
-            ``lambda_direction``, ``lambda_progress``, and ``lambda_smooth``.
+            ``lambda_direction``, ``lambda_progress``, ``lambda_smooth``,
+            and optional ``enable_direction``, ``enable_progress``,
+            ``enable_smooth`` booleans (all default to True).
 
     Example:
         >>> criterion = NavigationLoss(cfg)
@@ -142,6 +144,9 @@ class NavigationLoss(nn.Module):
         self.lambda_direction: float = cfg.loss.lambda_direction
         self.lambda_progress: float  = cfg.loss.lambda_progress
         self.lambda_smooth: float    = cfg.loss.lambda_smooth
+        self.enable_direction: bool  = cfg.loss.get("enable_direction", True)
+        self.enable_progress: bool   = cfg.loss.get("enable_progress", True)
+        self.enable_smooth: bool     = cfg.loss.get("enable_smooth", True)
 
     def forward(
         self,
@@ -163,17 +168,30 @@ class NavigationLoss(nn.Module):
                   ``"loss/waypoint"``, ``"loss/direction"``,
                   ``"loss/progress"``, ``"loss/smooth"`` for wandb logging.
         """
-        l_waypoint  = compute_waypoint_loss(pred_waypoints, gt_waypoints)
-        l_direction = compute_direction_loss(pred_waypoints, route_direction)
-        l_progress  = compute_progress_loss(pred_waypoints, route_direction)
-        l_smooth    = compute_smooth_loss(pred_waypoints)
+        l_waypoint = compute_waypoint_loss(pred_waypoints, gt_waypoints)
 
-        total = (
-            l_waypoint
-            + self.lambda_direction * l_direction
-            + self.lambda_progress  * l_progress
-            + self.lambda_smooth    * l_smooth
+        zero = torch.tensor(0.0, device=pred_waypoints.device)
+
+        l_direction = (
+            compute_direction_loss(pred_waypoints, route_direction)
+            if self.enable_direction else zero
         )
+        l_progress = (
+            compute_progress_loss(pred_waypoints, route_direction)
+            if self.enable_progress else zero
+        )
+        l_smooth = (
+            compute_smooth_loss(pred_waypoints)
+            if self.enable_smooth else zero
+        )
+
+        total = l_waypoint
+        if self.enable_direction:
+            total = total + self.lambda_direction * l_direction
+        if self.enable_progress:
+            total = total + self.lambda_progress * l_progress
+        if self.enable_smooth:
+            total = total + self.lambda_smooth * l_smooth
 
         loss_dict: dict[str, torch.Tensor] = {
             "loss/total":     total,

@@ -1,0 +1,7 @@
+defaults:
+  - default
+
+loss:
+  enable_direction: false
+  enable_progress: false
+  enable_smooth: false

@@ -19,6 +19,7 @@ The system consists of two models:
 ### Encoders (separate weights, both EfficientNet-B0 based)
 - **VisualEncoder:** Each observation image → EfficientNet-B0 → Global Average Pooling → Linear(1280, 256) → 1 token. 4 images → `obs_tokens ∈ (B, 4, 256)`.
 - **MapEncoder:** Map image → EfficientNet-B0 → Keep 7×7 spatial feature map → Linear(1280, 256) → 49 tokens + 2D positional encoding → `map_tokens ∈ (B, 49, 256)`.
+  - Positional encoding type is configurable: `"learnable"` (default, `nn.Parameter`) or `"sinusoidal"` (fixed buffer, `_build_2d_sinusoidal_encoding`). Set via `encoder.map_pos_enc`.
 
 ### Decoder (two options, selectable via config)
 - **CrossAttentionDecoder:** [Self-Attention on obs] → [Cross-Attention: Q=obs, K/V=map] → [FFN]. Repeated L=4 times. Output: `context ∈ (B, 256)` via mean pooling.
@@ -37,11 +38,13 @@ L_total = L_waypoint + λ1 * L_direction + λ2 * L_progress + λ3 * L_smooth
 
 L_waypoint = (1/H) * Σ ||â_i - a*_i||₁           # L1 waypoint regression
 L_direction = 1 - cos(α̂, α*_route)                # route direction alignment
-L_progress  = -(1/H) * Σ (â_i · d̂_route)          # route progress incentive  
+L_progress  = -(1/H) * Σ (â_i · d̂_route)          # route progress incentive
 L_smooth    = (1/(H-1)) * Σ ||â_{i+1} - â_i||²    # trajectory smoothness
 
 Default: λ1=0.5, λ2=0.1, λ3=0.01
 ```
+
+Each auxiliary term can be individually disabled via config flags (`enable_direction`, `enable_progress`, `enable_smooth`). When disabled the term is 0.0 and excluded from the total. See ablation configs below.
 
 ## Key Design Decisions
 
@@ -66,7 +69,9 @@ dynav/
 ├── CLAUDE.md                     # THIS FILE
 ├── configs/
 │   ├── default.yaml              # shared hyperparameters
-│   └── map_nav.yaml              # Map Nav specific config
+│   ├── ablation_no_direction.yaml
+│   ├── ablation_no_progress.yaml
+│   └── ablation_waypoint_only.yaml
 ├── dynav/
 │   ├── __init__.py
 │   ├── models/
@@ -83,7 +88,7 @@ dynav/
 │   │   └── map_nav_model.py      # assembles encoder+decoder+head
 │   ├── data/
 │   │   ├── __init__.py
-│   │   ├── dataset.py
+│   │   ├── dataset.py            # DyNavDataset, DummyDyNavDataset
 │   │   └── transforms.py
 │   ├── losses/
 │   │   ├── __init__.py
@@ -95,7 +100,8 @@ dynav/
 ├── scripts/
 │   ├── train.py
 │   ├── evaluate.py
-│   └── visualize_attention.py
+│   ├── sanity_check.py
+│   └── visualize_attention.py    # --per-head flag for per-head heatmaps
 └── tests/
     ├── test_encoders.py
     ├── test_decoders.py
@@ -127,10 +133,14 @@ dynav/
 ```
 
 ### 2D Positional Encoding for Map Tokens
-Map spatial tokens need positional encoding to preserve grid layout. Use learnable 2D positional encoding:
+Map spatial tokens need positional encoding to preserve grid layout. Two options:
 ```python
-# Learnable: nn.Parameter(torch.randn(1, 49, d))
-# Or 2D sinusoidal: generate (7, 7, d) grid encoding, flatten to (49, d)
+# Learnable (default): nn.Parameter(torch.randn(1, 49, d) * 0.02)  — trainable
+# Sinusoidal (fixed):  _build_2d_sinusoidal_encoding(grid_size=7, dim=d)
+#   → splits dim into two halves: first half = row encoding, second = col encoding
+#   → each half = sin+cos at quarter_dim frequency bands
+#   → registered as buffer (not trained)
+# Select via: encoder.map_pos_enc: "learnable" | "sinusoidal"
 ```
 
 ### Cross-Attention Decoder Block Structure
@@ -142,13 +152,17 @@ Input: obs_tokens (B, N_o, d), map_tokens (B, N_m, d)
 │
 ├─ Sub-layer 2: MultiHeadCrossAttention(Q=obs_tokens', K=map_tokens, V=map_tokens) + LayerNorm + residual
 │  → obs_tokens'' (B, N_o, d)
-│  → attn_weights (B, n_heads, N_o, N_m)  ← save for visualization
+│  → attn_weights:
+│      averaged (return_attention=True):  (B, N_o, N_m)
+│      per-head  (return_per_head=True):  (B, n_heads, N_o, N_m)
 │
 ├─ Sub-layer 3: FFN(obs_tokens'') + LayerNorm + residual
 │  → obs_tokens_out (B, N_o, d)
 │
 Output: obs_tokens_out, attn_weights
 ```
+
+Per-head weights are available throughout: `CrossAttentionDecoderBlock` → `CrossAttentionDecoder` → `DyNavModel.forward(return_per_head=True)`. Visualized with `scripts/visualize_attention.py --per-head`.
 
 ### Self-Attention Decoder Block Structure (ViNT-style baseline)
 ```
@@ -174,24 +188,28 @@ model:
   token_dim: 256                    # d — embedding dimension
   obs_context_length: 2             # K — number of past frames
   prediction_horizon: 5             # H — number of waypoints to predict
-  
+
 encoder:
   backbone: "efficientnet_b0"
   pretrained: true
   freeze_epochs: 5                  # freeze encoder for first N epochs
-  
+  map_pos_enc: "learnable"          # "learnable" or "sinusoidal"
+
 decoder:
   type: "cross_attention"           # "cross_attention" or "self_attention"
   n_layers: 4
   n_heads: 4
   d_ff: 512
   dropout: 0.1
-  
+
 action_head:
   type: "regression"                # "regression" or "diffusion" (future)
   hidden_dim: 128
 
 loss:
+  enable_direction: true            # set false to ablate direction loss
+  enable_progress: true             # set false to ablate progress loss
+  enable_smooth: true               # set false to ablate smooth loss
   lambda_direction: 0.5
   lambda_progress: 0.1
   lambda_smooth: 0.01
@@ -211,3 +229,15 @@ data:
   normalize_waypoints: true
   max_waypoint_distance: 2.5        # meters, for normalization
 ```
+
+## Ablation Configs
+
+Three ready-made ablation overrides in `configs/`:
+
+| File | Effect |
+|---|---|
+| `ablation_no_direction.yaml` | `enable_direction: false` |
+| `ablation_no_progress.yaml` | `enable_progress: false` |
+| `ablation_waypoint_only.yaml` | All auxiliary losses disabled |
+
+Usage: `python scripts/train.py --config-name ablation_waypoint_only`

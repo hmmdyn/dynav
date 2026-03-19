@@ -1,0 +1,5 @@
+defaults:
+  - default
+
+loss:
+  enable_progress: false

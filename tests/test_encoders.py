@@ -5,6 +5,7 @@ Run with: pytest tests/test_encoders.py -v
 
 import pytest
 import torch
+import torch.nn as nn
 
 from dynav.models.encoders import MapEncoder, VisualEncoder
 
@@ -106,6 +107,55 @@ class TestMapEncoder:
         assert map_encoder.proj.weight.requires_grad
         assert map_encoder.pos_enc_2d.requires_grad
         map_encoder.unfreeze_backbone()  # restore state for other tests
+
+
+# ── MapEncoder positional encoding type tests ──────────────────────────────────
+
+class TestMapEncoderPosEncType:
+    """Verify learnable and sinusoidal pos_enc_type options."""
+
+    def test_learnable_output_shape(self) -> None:
+        """Learnable pos enc: output must be (B, 49, 256)."""
+        enc = MapEncoder(token_dim=256, pretrained=False, pos_enc_type="learnable")
+        x = torch.randn(2, 3, 224, 224)
+        with torch.no_grad():
+            tokens = enc(x)
+        assert tokens.shape == (2, 49, 256), (
+            f"Expected (2, 49, 256), got {tuple(tokens.shape)}"
+        )
+
+    def test_sinusoidal_output_shape(self) -> None:
+        """Sinusoidal pos enc: output must be (B, 49, 256)."""
+        enc = MapEncoder(token_dim=256, pretrained=False, pos_enc_type="sinusoidal")
+        x = torch.randn(2, 3, 224, 224)
+        with torch.no_grad():
+            tokens = enc(x)
+        assert tokens.shape == (2, 49, 256), (
+            f"Expected (2, 49, 256), got {tuple(tokens.shape)}"
+        )
+
+    def test_learnable_pos_enc_is_parameter(self) -> None:
+        """Learnable pos enc must be an nn.Parameter (requires_grad=True)."""
+        enc = MapEncoder(token_dim=256, pretrained=False, pos_enc_type="learnable")
+        assert isinstance(enc.pos_enc_2d, nn.Parameter)
+        assert enc.pos_enc_2d.requires_grad
+
+    def test_sinusoidal_pos_enc_not_parameter(self) -> None:
+        """Sinusoidal pos enc must be a buffer — not a learnable parameter."""
+        enc = MapEncoder(token_dim=256, pretrained=False, pos_enc_type="sinusoidal")
+        # Must not appear in named_parameters()
+        param_names = {name for name, _ in enc.named_parameters()}
+        assert "pos_enc_2d" not in param_names, (
+            "pos_enc_2d should be a buffer, not a learnable parameter"
+        )
+        # Must be accessible as an attribute (registered buffer)
+        assert hasattr(enc, "pos_enc_2d")
+        assert not enc.pos_enc_2d.requires_grad
+
+    def test_invalid_pos_enc_type_raises(self) -> None:
+        """Unknown pos_enc_type must raise ValueError."""
+        with pytest.raises(ValueError, match="Unknown pos_enc_type"):
+            MapEncoder(token_dim=256, pretrained=False, pos_enc_type="rotary")
 
 
 # ── Independence test ──────────────────────────────────────────────────────────

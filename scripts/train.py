@@ -138,7 +138,7 @@ def _eval_one_epoch(
 
 @hydra.main(config_path="../configs", config_name="default", version_base=None)
 def main(cfg: DictConfig) -> None:
-    """Train dynavModel with config-driven hyperparameters.
+    """Train DyNavModel with config-driven hyperparameters.
 
     Args:
         cfg: Hydra-merged DictConfig from configs/default.yaml and CLI overrides.
@@ -149,19 +149,19 @@ def main(cfg: DictConfig) -> None:
     log.info(f"Device: {device}")
 
     # ── Datasets ───────────────────────────────────────────────────────────────
-    from dynav.data.dataset import DummydynavDataset, dynavDataset
+    from dynav.data.dataset import DummyDyNavDataset, DyNavDataset
 
     n_obs = cfg.model.obs_context_length + 2
 
     if cfg.training.dummy:
-        log.info("Using DummydynavDataset (dummy=true)")
-        train_ds = DummydynavDataset(
+        log.info("Using DummyDyNavDataset (dummy=true)")
+        train_ds = DummyDyNavDataset(
             size=cfg.training.dummy_size,
             n_obs=n_obs,
             image_size=cfg.data.image_size,
             horizon=cfg.model.prediction_horizon,
         )
-        val_ds = DummydynavDataset(
+        val_ds = DummyDyNavDataset(
             size=max(cfg.training.dummy_size // 5, 16),
             n_obs=n_obs,
             image_size=cfg.data.image_size,
@@ -171,8 +171,8 @@ def main(cfg: DictConfig) -> None:
     else:
         from hydra.utils import get_original_cwd
         data_dir = Path(get_original_cwd()) / cfg.data.data_dir
-        train_ds = dynavDataset(data_dir, split="train", image_size=cfg.data.image_size)
-        val_ds   = dynavDataset(data_dir, split="val",   image_size=cfg.data.image_size)
+        train_ds = DyNavDataset(data_dir, split="train", image_size=cfg.data.image_size)
+        val_ds   = DyNavDataset(data_dir, split="val",   image_size=cfg.data.image_size)
 
     num_workers = cfg.training.num_workers
     train_loader = DataLoader(
@@ -191,9 +191,9 @@ def main(cfg: DictConfig) -> None:
     log.info(f"Train: {len(train_ds)} samples  |  Val: {len(val_ds)} samples")
 
     # ── Model ──────────────────────────────────────────────────────────────────
-    from dynav.models.map_nav_model import dynavModel
+    from dynav.models.map_nav_model import DyNavModel
 
-    model = dynavModel.from_config(cfg).to(device)
+    model = DyNavModel.from_config(cfg).to(device)
     model.print_parameter_summary()
 
     # ── Loss / optimizer / scheduler ───────────────────────────────────────────

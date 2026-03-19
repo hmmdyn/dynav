@@ -181,9 +181,9 @@ dynav/
 │   ├── models/
 │   │   ├── encoders/             # visual_encoder.py, map_encoder.py
 │   │   ├── decoders/             # cross_attention_decoder.py, self_attention_decoder.py, action_heads.py
-│   │   └── map_nav_model.py      # dynavModel (전체 조립)
+│   │   └── map_nav_model.py      # DyNavModel (전체 조립)
 │   ├── data/
-│   │   ├── dataset.py            # dynavDataset, DummydynavDataset
+│   │   ├── dataset.py            # DyNavDataset, DummyDyNavDataset
 │   │   └── transforms.py         # train/eval 이미지 변환
 │   ├── losses/
 │   │   └── navigation_losses.py  # NavigationLoss

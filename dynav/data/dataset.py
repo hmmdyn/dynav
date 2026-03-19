@@ -1,7 +1,7 @@
 """Dataset classes for Map Navigation Model.
 
-dynavDataset: production dataset that reads from disk.
-DummydynavDataset: in-memory random dataset for overfitting tests and
+DyNavDataset: production dataset that reads from disk.
+DummyDyNavDataset: in-memory random dataset for overfitting tests and
     pipeline debugging — no data files required.
 """
 
@@ -16,7 +16,7 @@ from torch.utils.data import Dataset
 
 # ── Production dataset ─────────────────────────────────────────────────────────
 
-class dynavDataset(Dataset):
+class DyNavDataset(Dataset):
     """Reads real navigation data from a structured directory on disk.
 
     Expected layout::
@@ -91,7 +91,7 @@ class dynavDataset(Dataset):
                 - ``gt_waypoints``: (H, 2) float tensor, normalized to [-1, 1].
                 - ``route_direction``: scalar tensor (radians, body frame).
         """
-        from PIL import Image  # lazy import — not needed for DummydynavDataset
+        from PIL import Image  # lazy import — not needed for DummyDyNavDataset
 
         sample_dir = self.samples[idx]
 
@@ -120,7 +120,7 @@ class dynavDataset(Dataset):
 
 # ── Dummy dataset ──────────────────────────────────────────────────────────────
 
-class DummydynavDataset(Dataset):
+class DummyDyNavDataset(Dataset):
     """In-memory dummy dataset for overfitting tests and pipeline debugging.
 
     All tensors are pre-generated at construction time with a fixed seed, so
@@ -139,7 +139,7 @@ class DummydynavDataset(Dataset):
         seed: Random seed for reproducible data generation.
 
     Example:
-        >>> ds = DummydynavDataset(size=10, fixed_targets=True)
+        >>> ds = DummyDyNavDataset(size=10, fixed_targets=True)
         >>> sample = ds[0]
         >>> sample["observations"].shape   # (4, 3, 224, 224)
         >>> sample["gt_waypoints"].shape   # (5, 2)
@@ -191,7 +191,7 @@ class DummydynavDataset(Dataset):
 
         Returns:
             Dict with keys ``observations``, ``map_image``, ``gt_waypoints``,
-            ``route_direction``. Shapes match dynavDataset.__getitem__.
+            ``route_direction``. Shapes match DyNavDataset.__getitem__.
         """
         return {
             "observations":    self._observations[idx],     # (N_obs, 3, H, W)

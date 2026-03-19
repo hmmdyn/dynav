@@ -205,3 +205,51 @@ class TestNavigationLoss:
         total, _ = nav_loss(pred, gt, rdir)
         total.backward()
         assert pred.grad is not None
+
+
+# ── Enable/disable flags ────────────────────────────────────────────────────────
+
+class TestNavigationLossEnableFlags:
+    """Verify that enable_* flags correctly zero out individual loss terms."""
+
+    def _make_loss(self, **overrides) -> NavigationLoss:
+        cfg = OmegaConf.load("configs/default.yaml")
+        for key, val in overrides.items():
+            OmegaConf.update(cfg, f"loss.{key}", val)
+        return NavigationLoss(cfg)
+
+    def _inputs(self):
+        pred = torch.randn(B, H, 2).tanh()
+        gt   = torch.randn(B, H, 2).tanh()
+        rdir = torch.rand(B) * 2 * math.pi
+        return pred, gt, rdir
+
+    def test_disable_direction_zeros_loss(self) -> None:
+        """enable_direction=false → loss/direction is 0.0."""
+        loss_fn = self._make_loss(enable_direction=False)
+        pred, gt, rdir = self._inputs()
+        _, d = loss_fn(pred, gt, rdir)
+        assert d["loss/direction"].item() == 0.0
+
+    def test_disable_progress_zeros_loss(self) -> None:
+        """enable_progress=false → loss/progress is 0.0."""
+        loss_fn = self._make_loss(enable_progress=False)
+        pred, gt, rdir = self._inputs()
+        _, d = loss_fn(pred, gt, rdir)
+        assert d["loss/progress"].item() == 0.0
+
+    def test_disable_smooth_zeros_loss(self) -> None:
+        """enable_smooth=false → loss/smooth is 0.0."""
+        loss_fn = self._make_loss(enable_smooth=False)
+        pred, gt, rdir = self._inputs()
+        _, d = loss_fn(pred, gt, rdir)
+        assert d["loss/smooth"].item() == 0.0
+
+    def test_waypoint_only_total_equals_waypoint(self) -> None:
+        """All auxiliary losses disabled → total == waypoint loss."""
+        loss_fn = self._make_loss(
+            enable_direction=False, enable_progress=False, enable_smooth=False
+        )
+        pred, gt, rdir = self._inputs()
+        total, d = loss_fn(pred, gt, rdir)
+        assert abs(total.item() - d["loss/waypoint"].item()) < 1e-6

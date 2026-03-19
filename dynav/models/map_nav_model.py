@@ -18,7 +18,7 @@ from dynav.models.decoders import (
 from dynav.models.encoders import MapEncoder, VisualEncoder
 
 
-class dynavModel(nn.Module):
+class DyNavModel(nn.Module):
     """End-to-end Map Navigation Model.
 
     Accepts a Hydra/OmegaConf DictConfig that follows the schema in
@@ -32,7 +32,7 @@ class dynavModel(nn.Module):
     Example:
         >>> from omegaconf import OmegaConf
         >>> cfg = OmegaConf.load("configs/default.yaml")
-        >>> model = dynavModel(cfg)
+        >>> model = DyNavModel(cfg)
         >>> obs = torch.randn(2, 4, 3, 224, 224)
         >>> mp  = torch.randn(2, 3, 224, 224)
         >>> out = model(obs, mp)
@@ -61,6 +61,7 @@ class dynavModel(nn.Module):
         self.map_encoder = MapEncoder(
             token_dim=token_dim,
             pretrained=pretrained,
+            pos_enc_type=cfg.encoder.get("map_pos_enc", "learnable"),
         )
 
         # ── Decoder (selected by config) ───────────────────────────────────────
@@ -101,6 +102,7 @@ class dynavModel(nn.Module):
         observations: torch.Tensor,
         map_image: torch.Tensor,
         return_attention: bool = False,
+        return_per_head: bool = False,
     ) -> dict[str, Optional[torch.Tensor]]:
         """Run the full navigation pipeline.
 
@@ -109,20 +111,26 @@ class dynavModel(nn.Module):
                 (B, N_obs, 3, H, W).
             map_image: OSM map+path image of shape (B, 3, H, W).
             return_attention: If True and decoder is CrossAttentionDecoder,
-                include per-layer attention weights in the output dict.
+                include head-averaged attention weights in the output dict.
+            return_per_head: If True and decoder is CrossAttentionDecoder,
+                include per-head attention weights (B, n_heads, N_o, N_m)
+                per layer. Takes priority over return_attention.
 
         Returns:
             Dictionary with:
                 - ``"waypoints"``: Predicted waypoints (B, H, 2) in [-1, 1].
-                - ``"attention_weights"``: List of (B, N_o, N_m) tensors
-                  (one per layer) if return_attention and cross-attention
-                  decoder is used, else None.
+                - ``"attention_weights"``: List of tensors per layer
+                  — ``(B, n_heads, N_o, N_m)`` if return_per_head,
+                  — ``(B, N_o, N_m)`` if return_attention,
+                  — ``None`` otherwise.
         """
         obs_tokens = self.visual_encoder(observations)    # (B, N_obs, d)
         map_tokens = self.map_encoder(map_image)          # (B, 49, d)
 
         context, attn_weights = self.decoder(
-            obs_tokens, map_tokens, return_attention=return_attention
+            obs_tokens, map_tokens,
+            return_attention=return_attention,
+            return_per_head=return_per_head,
         )                                                 # context: (B, d)
 
         waypoints = self.waypoint_head(context)           # (B, H, 2)
@@ -182,13 +190,13 @@ class dynavModel(nn.Module):
     # ── Factory ────────────────────────────────────────────────────────────────
 
     @classmethod
-    def from_config(cls, cfg: DictConfig) -> "dynavModel":
-        """Construct a dynavModel from an OmegaConf DictConfig.
+    def from_config(cls, cfg: DictConfig) -> "DyNavModel":
+        """Construct a DyNavModel from an OmegaConf DictConfig.
 
         Args:
             cfg: Config loaded via ``OmegaConf.load`` or Hydra.
 
         Returns:
-            Instantiated dynavModel.
+            Instantiated DyNavModel.
         """
         return cls(cfg)

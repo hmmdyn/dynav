@@ -1,4 +1,4 @@
-"""Sanity check: overfit DummydynavDataset in 100 iterations.
+"""Sanity check: overfit DummyDyNavDataset in 100 iterations.
 
 Verifies that the entire training pipeline (model, loss, optimizer,
 data → forward → backward → step) is correctly wired end-to-end and
@@ -57,7 +57,7 @@ def run_sanity_check(
 ) -> bool:
     """Run the overfitting sanity check and return True on success.
 
-    Uses ``DummydynavDataset(fixed_targets=True)`` so all samples share the
+    Uses ``DummyDyNavDataset(fixed_targets=True)`` so all samples share the
     same straight-ahead gt_waypoints — the model only needs to learn the
     output bias, which converges very quickly.
 
@@ -72,9 +72,9 @@ def run_sanity_check(
     Returns:
         True if final waypoint_loss < threshold, False otherwise.
     """
-    from dynav.data.dataset import DummydynavDataset
+    from dynav.data.dataset import DummyDyNavDataset
     from dynav.losses.navigation_losses import compute_waypoint_loss
-    from dynav.models.map_nav_model import dynavModel
+    from dynav.models.map_nav_model import DyNavModel
 
     cfg    = _build_lean_cfg()
     device = torch.device(device_str)
@@ -88,7 +88,7 @@ def run_sanity_check(
 
     # ── Dataset: fixed straight-ahead targets (trivially easy to overfit) ──────
     n_obs   = cfg.model.obs_context_length + 2
-    dataset = DummydynavDataset(
+    dataset = DummyDyNavDataset(
         size=n_samples,
         n_obs=n_obs,
         image_size=cfg.data.image_size,
@@ -112,7 +112,7 @@ def run_sanity_check(
     # small batch produces high-variance features that saturate tanh on the
     # first Adam step, stalling training. eval() mode for the backbone gives
     # deterministic, bounded features.
-    model = dynavModel.from_config(cfg).to(device)
+    model = DyNavModel.from_config(cfg).to(device)
     model.freeze_encoders()
     model.eval()                            # backbone BN uses running stats
 
@@ -176,7 +176,7 @@ def run_sanity_check(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Overfit DummydynavDataset to verify training pipeline correctness."
+        description="Overfit DummyDyNavDataset to verify training pipeline correctness."
     )
     parser.add_argument(
         "--threshold", type=float, default=0.05,

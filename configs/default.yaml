@@ -7,6 +7,7 @@ encoder:
   backbone: "efficientnet_b0"
   pretrained: true
   freeze_epochs: 5                  # freeze encoder for first N epochs
+  map_pos_enc: "learnable"          # "learnable" or "sinusoidal"
 
 decoder:
   type: "cross_attention"           # "cross_attention" or "self_attention"
@@ -20,6 +21,9 @@ action_head:
   hidden_dim: 128
 
 loss:
+  enable_direction: true
+  enable_progress: true
+  enable_smooth: true
   lambda_direction: 0.5
   lambda_progress: 0.1
   lambda_smooth: 0.01
@@ -35,7 +39,7 @@ training:
   save_every: 10                    # save checkpoint every N epochs
   num_workers: 4                    # DataLoader worker processes
   use_wandb: false                  # enable wandb logging
-  dummy: false                      # use DummydynavDataset instead of real data
+  dummy: false                      # use DummyDyNavDataset instead of real data
   dummy_size: 100                   # number of dummy samples
 
 data:
