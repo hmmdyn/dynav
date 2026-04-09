@@ -57,10 +57,11 @@ topics:
   #   gps_heading: ""   # leave empty to disable; fall back to "imu" or "gps"
 
   # --- IMU ---
-  # Insta360 madgwick-filtered IMU output.
-  imu: "/imu/data"
+  # Jackal J100 IMU — on the robot base, aligned with robot body frame.
+  # Used as heading fallback when heading_source is "imu".
+  imu: "/j100_0519/sensors/imu_0/data"
   # Alternatives:
-  #   imu: "/imu/data_raw"             # raw Insta360 IMU (no orientation)
+  #   imu: "/imu/data"                 # Insta360 madgwick (camera frame — not recommended for heading)
   #   imu: "/microstrain/imu/data"     # Microstrain GX5 (some Jackals)
 
   # --- Wheel odometry (optional) ---

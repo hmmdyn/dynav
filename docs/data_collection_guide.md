@@ -89,8 +89,8 @@ ros2 topic echo /j100_0519/sensors/gps_0/fix --once
 # J100 GPS 헤딩 확인
 ros2 topic echo /j100_0519/sensors/gps_0/heading --once
 
-# Insta360 IMU 확인
-ros2 topic echo /imu/data --once
+# J100 IMU 확인
+ros2 topic echo /j100_0519/sensors/imu_0/data --once
 ```
 
 **토픽 대응표:**
@@ -102,7 +102,7 @@ ros2 topic echo /imu/data --once
 | 후방 카메라 | `/fisheye/back/image` | `sensor_msgs/Image` |
 | GPS fix | `/j100_0519/sensors/gps_0/fix` | `sensor_msgs/NavSatFix` |
 | GPS 헤딩 | `/j100_0519/sensors/gps_0/heading` | `geometry_msgs/QuaternionStamped` |
-| IMU (filtered) | `/imu/data` | `sensor_msgs/Imu` |
+| IMU | `/j100_0519/sensors/imu_0/data` | `sensor_msgs/Imu` |
 
 > **권장:** 프레임 드롭 방지를 위해 `/fisheye/dual/image/compressed`를 녹화하고 후처리에서 전방/후방으로 분리.
 
@@ -139,7 +139,7 @@ python scripts/record_bag.py --output ~/bags/campus_run_01
 - `/fisheye/dual/image/compressed`
 - `/j100_0519/sensors/gps_0/fix`
 - `/j100_0519/sensors/gps_0/heading`
-- `/imu/data_raw`
+- `/j100_0519/sensors/imu_0/data`
 
 **저장 용량 예상:**
 
@@ -161,7 +161,7 @@ Duration:          612.345s
 Topic information: Topic: /fisheye/dual/image/compressed | Count: 18369
                    Topic: /j100_0519/sensors/gps_0/fix   | Count: 612
                    Topic: /j100_0519/sensors/gps_0/heading | Count: 612
-                   Topic: /imu/data_raw                  | Count: 61230
+                   Topic: /j100_0519/sensors/imu_0/data  | Count: 61230
 ```
 
 확인 항목:
@@ -233,7 +233,7 @@ topics:
   dual_camera: "/fisheye/dual/image/compressed"
   gps:         "/j100_0519/sensors/gps_0/fix"
   gps_heading: "/j100_0519/sensors/gps_0/heading"
-  imu:         "/imu/data"
+  imu:         "/j100_0519/sensors/imu_0/data"
 ```
 
 전방/후방 분리 녹화한 경우:
@@ -253,7 +253,7 @@ topics:
 | 다른 로봇 네임스페이스 | `/j100_0519/sensors/gps_0/fix` | `/j100_XXXX/sensors/gps_0/fix` |
 | GPS 헤딩 없음 (fallback) | `heading_source: gps_heading` | `heading_source: imu` 또는 `gps` |
 | RealSense 카메라 | `/fisheye/front/image` | `/camera/color/image_raw` |
-| Microstrain IMU | `/imu/data` | `/microstrain/imu/data` |
+| Microstrain IMU | `/j100_0519/sensors/imu_0/data` | `/microstrain/imu/data` |
 
 ---
 

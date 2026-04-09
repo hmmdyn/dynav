@@ -30,12 +30,9 @@ topics:
   - /j100_0519/sensors/gps_0/heading  # geometry_msgs/QuaternionStamped
 
   # --- IMU ---
-  # Record raw IMU from Insta360 — apply madgwick filter at post-processing
-  # to avoid locking in a specific filter configuration at record time.
-  - /imu/data_raw   # sensor_msgs/Imu (linear_accel + angular_vel only)
-
-  # Alternatives:
-  # - /imu/data     # filtered orientation (if madgwick is already running)
+  # Jackal J100 IMU — mounted on the robot base, aligned with robot body frame.
+  # Used as heading fallback when gps_0/heading is unavailable.
+  - /j100_0519/sensors/imu_0/data   # sensor_msgs/Imu (EKF-fused orientation)
 
   # --- Optional: odometry ---
   # Uncomment if EKF-fused odometry is available on your setup.
