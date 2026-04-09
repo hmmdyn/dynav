@@ -26,17 +26,23 @@ topics:
 
   # --- GPS ---
   # Clearpath J100 (j100_0519) GPS fix and heading
-  - /j100_0519/sensors/gps_0/fix      # sensor_msgs/NavSatFix
+  - /j100_0519/sensors/gps_0/fix      # sensor_msgs/NavSatFix  (raw, fallback)
   - /j100_0519/sensors/gps_0/heading  # geometry_msgs/QuaternionStamped
+
+  # EKF-fused GPS from navsat_transform_node (jackal_localization_ws).
+  # Preferred over raw fix in extract_rosbag.py (smoother, GPS-jump-free).
+  # Only published when jackal_localization localization.launch.py is running.
+  - /gps/filtered                     # sensor_msgs/NavSatFix  (EKF-fused, preferred)
 
   # --- IMU ---
   # Jackal J100 IMU — mounted on the robot base, aligned with robot body frame.
   # Used as heading fallback when gps_0/heading is unavailable.
-  - /j100_0519/sensors/imu_0/data   # sensor_msgs/Imu (EKF-fused orientation)
+  - /j100_0519/sensors/imu_0/data   # sensor_msgs/Imu
 
-  # --- Optional: odometry ---
-  # Uncomment if EKF-fused odometry is available on your setup.
-  # - /j100_0519/odometry/filtered
+  # --- Odometry ---
+  # J100 EKF-filtered wheel odometry (wheel odom + IMU, no GPS).
+  # Used by navsat_transform_node for GPS+odom fusion.
+  - /j100_0519/platform/odom/filtered  # nav_msgs/Odometry
 
 # ---------------------------------------------------------------------------
 # output — Bag storage settings

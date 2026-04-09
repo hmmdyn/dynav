@@ -42,12 +42,14 @@ topics:
   # dual_camera: "/fisheye/dual/image/compressed"
 
   # --- GPS / GNSS fix ---
-  # Clearpath J100 (namespace j100_0519) GPS fix.
-  gps: "/j100_0519/sensors/gps_0/fix"
+  # EKF-fused GPS from navsat_transform_node (GPS + wheel odom fusion).
+  # Requires jackal_localization_ws to have been running during recording.
+  # Falls back to raw fix if /gps/filtered is absent in the bag.
+  gps: "/gps/filtered"
   # Alternatives:
-  #   gps: "/navsat/fix"               # generic NavSatFix
-  #   gps: "/fix"                      # GPSd bridge
-  #   gps: "/gps/fix"                  # older Jackal with UM7 GPS
+  #   gps: "/j100_0519/sensors/gps_0/fix"  # raw GPS (use if /gps/filtered not recorded)
+  #   gps: "/navsat/fix"                    # generic NavSatFix
+  #   gps: "/fix"                           # GPSd bridge
 
   # --- GPS heading ---
   # Clearpath J100 compass heading as QuaternionStamped.
@@ -65,10 +67,11 @@ topics:
   #   imu: "/microstrain/imu/data"     # Microstrain GX5 (some Jackals)
 
   # --- Wheel odometry (optional) ---
-  # J100 does not expose an EKF-fused odometry topic by default.
-  # Uncomment if your setup publishes one.
+  # J100 EKF-filtered odometry (wheel odom + IMU). Recorded in bag but not
+  # directly used by extract_rosbag.py — navsat_transform_node consumes it
+  # at runtime to produce /gps/filtered.
   #
-  # odom: "/j100_0519/odometry/filtered"
+  # odom: "/j100_0519/platform/odom/filtered"
 
 # ---------------------------------------------------------------------------
 # sync — Time synchronization policy
