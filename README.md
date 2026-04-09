@@ -85,45 +85,15 @@ python scripts/sanity_check.py
 
 ## 데이터 수집
 
-### Stage 1 — API 기반 시뮬레이션 (로봇 불필요)
-
-OSRM 경로 API와 OSM 타일로 지도 이미지를 생성하고 샘플을 만듭니다. 카메라 이미지는 placeholder입니다.
+Insta360 X2/X3 + Jackal J100으로 rosbag을 녹화하고 학습 샘플을 추출합니다.
 
 ```bash
-# 단일 경로
-python scripts/collect_data.py \
-    --start 37.557 126.936 \
-    --end   37.620 126.980 \
-    --output data/ --split train --step 1.0
+# 1. rosbag 녹화
+python scripts/record_bag.py --output ~/bags/run_01
 
-# 여러 경로 배치
-python scripts/collect_data.py \
-    --routes-json routes.json \
-    --output data/ --split train
-```
-
-`routes.json` 형식:
-```json
-[
-  {"start": [37.557, 126.936], "end": [37.620, 126.980]},
-  {"start": [37.500, 127.000], "end": [37.540, 127.050]}
-]
-```
-
-### Stage 2 — 실제 로봇 rosbag 추출
-
-Jackal에서 rosbag 녹화 후 실제 카메라/GPS 데이터로 샘플을 생성합니다.
-
-```bash
-# 1. rosbag 녹화 (Jackal에서)
-ros2 bag record \
-    /front/image_raw /rear/image_raw \
-    /navsat/fix /imu/data /odometry/filtered \
-    -o recording_$(date +%Y%m%d_%H%M%S)
-
-# 2. 데이터 추출
+# 2. 학습 샘플 추출
 python scripts/extract_rosbag.py \
-    --bag recording_20260318_120000.db3 \
+    --bag ~/bags/run_01/ \
     --output data/ \
     --split train \
     --goal-lat 37.562 --goal-lon 126.941
@@ -174,7 +144,8 @@ dynav/
 ├── configs/
 │   ├── default.yaml              # 전체 하이퍼파라미터
 │   ├── map_nav.yaml              # Map Nav 전용 설정
-│   └── rosbag_topics.yaml        # rosbag 추출 설정
+│   ├── rosbag_topics.yaml        # rosbag 추출 설정 (Insta360 + J100 기본값)
+│   └── record_topics.yaml        # rosbag 녹화 토픽 목록
 ├── docs/
 │   └── data_collection_guide.md  # 데이터 수집 가이드 (한국어)
 ├── dynav/
@@ -191,7 +162,7 @@ dynav/
 │       └── geometry.py           # 좌표 변환 유틸리티
 ├── scripts/
 │   ├── train.py                  # 학습 스크립트 (Hydra)
-│   ├── collect_data.py           # API 기반 데이터 수집
+│   ├── record_bag.py             # config-driven rosbag 녹화
 │   ├── extract_rosbag.py         # rosbag → 데이터셋 변환
 │   ├── sanity_check.py           # CI 검증
 │   └── visualize_attention.py    # Attention heatmap 시각화

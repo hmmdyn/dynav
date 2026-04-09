@@ -351,16 +351,25 @@ class BagExtractor:
             Mapping ``{topic: [(ts_ns, msg), ...]}``, sorted by timestamp.
         """
         cfg = self.cfg
-        topics_of_interest = {
-            cfg.topics.front_camera,
-            cfg.topics.rear_camera,
-            cfg.topics.gps,
-            cfg.topics.imu,
-        }
-        # odom is optional
+
+        # Determine camera topics.  When dual_camera is set, the dual
+        # compressed stream is used and split into front/rear at sync time.
+        dual_topic: Optional[str] = cfg.topics.get("dual_camera")
+        if dual_topic:
+            camera_topics: set = {dual_topic}
+        else:
+            camera_topics = {cfg.topics.front_camera, cfg.topics.rear_camera}
+
+        topics_of_interest = camera_topics | {cfg.topics.gps, cfg.topics.imu}
+
+        # Optional topics
         odom_topic: Optional[str] = cfg.topics.get("odom")
         if odom_topic:
             topics_of_interest.add(odom_topic)
+
+        gps_heading_topic: Optional[str] = cfg.topics.get("gps_heading")
+        if gps_heading_topic:
+            topics_of_interest.add(gps_heading_topic)
 
         messages: Dict[str, List[Tuple[int, object]]] = {t: [] for t in topics_of_interest}
 
@@ -438,6 +447,25 @@ class BagExtractor:
     # Heading
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _split_dual_fisheye(img: Image.Image) -> Tuple[Image.Image, Image.Image]:
+        """Split a dual-fisheye image into front (left) and rear (right) halves.
+
+        The Insta360 X2/X3 dual stream places the front lens on the left half
+        and the back lens on the right half of the frame.
+
+        Args:
+            img: Full dual-fisheye PIL Image (width = 2 × height, approximately).
+
+        Returns:
+            (front_img, rear_img) as separate PIL Images of equal size.
+        """
+        w, h = img.size
+        mid = w // 2
+        front = img.crop((0, 0, mid, h))
+        rear = img.crop((mid, 0, w, h))
+        return front, rear
+
     def _get_heading(
         self,
         ts_ns: int,
@@ -445,19 +473,38 @@ class BagExtractor:
         gps_traj: List[Tuple[int, float, float]],
         source: str,
         odom_msgs: Optional[List[Tuple[int, object]]] = None,
+        gps_heading_msgs: Optional[List[Tuple[int, object]]] = None,
     ) -> Optional[float]:
         """Compute compass heading (degrees, CW from north) at *ts_ns*.
 
         Args:
-            ts_ns:     Query timestamp in nanoseconds.
-            imu_msgs:  Sorted list of (ts_ns, IMU msg) pairs.
-            gps_traj:  Sorted GPS trajectory list.
-            source:    One of ``"imu"``, ``"gps"``, or ``"odom"``.
-            odom_msgs: Optional odometry message list (used when source="odom").
+            ts_ns:             Query timestamp in nanoseconds.
+            imu_msgs:          Sorted list of (ts_ns, IMU msg) pairs.
+            gps_traj:          Sorted GPS trajectory list.
+            source:            One of ``"gps_heading"``, ``"imu"``, ``"gps"``,
+                               or ``"odom"``.
+            odom_msgs:         Optional odometry message list (source="odom").
+            gps_heading_msgs:  Optional QuaternionStamped list (source="gps_heading").
 
         Returns:
             Heading in degrees, or None if the required data is unavailable.
         """
+        if source == "gps_heading":
+            if not gps_heading_msgs:
+                return None
+            tol_ns = int(self.cfg.sync.imu_tol_s * NS_PER_S)
+            msg = self._find_nearest(gps_heading_msgs, ts_ns, tol_ns)
+            if msg is None:
+                return None
+            # geometry_msgs/QuaternionStamped: msg.quaternion.{x,y,z,w}
+            q = msg.quaternion
+            # ENU quaternion — convert yaw (CCW from East) to compass (CW from North)
+            yaw_rad = math.atan2(
+                2.0 * (q.w * q.z + q.x * q.y),
+                1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+            )
+            return (90.0 - math.degrees(yaw_rad)) % 360.0
+
         if source == "imu":
             tol_ns = int(self.cfg.sync.imu_tol_s * NS_PER_S)
             msg = self._find_nearest(imu_msgs, ts_ns, tol_ns)
@@ -594,17 +641,31 @@ class BagExtractor:
         Returns:
             List of synchronised frames, ready for map rendering.
         """
-        front_topic = cfg.topics.front_camera
-        rear_topic = cfg.topics.rear_camera
         gps_topic = cfg.topics.gps
         imu_topic = cfg.topics.imu
         odom_topic: Optional[str] = cfg.topics.get("odom")
+        gps_heading_topic: Optional[str] = cfg.topics.get("gps_heading")
+        dual_topic: Optional[str] = cfg.topics.get("dual_camera")
 
-        front_msgs = messages[front_topic]
-        rear_msgs = messages[rear_topic]
+        # Camera message lists — dual mode splits the image at decode time
+        if dual_topic:
+            dual_msgs = messages[dual_topic]
+            front_msgs = dual_msgs   # iterated as primary stream
+            rear_msgs = dual_msgs    # same list; front/rear decoded together below
+            front_topic = dual_topic
+            rear_topic = dual_topic
+            _dual_mode = True
+        else:
+            front_topic = cfg.topics.front_camera
+            rear_topic = cfg.topics.rear_camera
+            front_msgs = messages[front_topic]
+            rear_msgs = messages[rear_topic]
+            _dual_mode = False
+
         gps_msgs = messages[gps_topic]
         imu_msgs = messages[imu_topic]
         odom_msgs = messages.get(odom_topic, []) if odom_topic else []
+        gps_heading_msgs = messages.get(gps_heading_topic, []) if gps_heading_topic else []
 
         gps_traj = self._build_gps_trajectory(gps_msgs)
 
@@ -649,12 +710,13 @@ class BagExtractor:
 
             # Heading
             heading_deg = self._get_heading(
-                ts_ns, imu_msgs, gps_traj, cfg.data.heading_source, odom_msgs
+                ts_ns, imu_msgs, gps_traj, cfg.sync.heading_source, odom_msgs,
+                gps_heading_msgs=gps_heading_msgs,
             )
             if heading_deg is None:
                 continue
 
-            # Rear camera
+            # Rear camera (or dual — same list)
             rear_msg = self._find_nearest(rear_msgs, ts_ns, tol_ns=imu_tol_ns * 5)
             if rear_msg is None:
                 continue
@@ -671,10 +733,21 @@ class BagExtractor:
 
             # Decode images
             try:
-                front_img = _decode_any_image(_msg, front_topic)
-                rear_img = _decode_any_image(rear_msg, rear_topic)
-                front_past1 = _decode_any_image(front_past1_msg, front_topic)
-                front_past2 = _decode_any_image(front_past2_msg, front_topic)
+                if _dual_mode:
+                    # Decode dual image once, split into front and rear halves
+                    dual_current = _decode_any_image(_msg, front_topic)
+                    front_img, rear_img = self._split_dual_fisheye(dual_current)
+
+                    dual_past1 = _decode_any_image(front_past1_msg, front_topic)
+                    front_past1, _ = self._split_dual_fisheye(dual_past1)
+
+                    dual_past2 = _decode_any_image(front_past2_msg, front_topic)
+                    front_past2, _ = self._split_dual_fisheye(dual_past2)
+                else:
+                    front_img = _decode_any_image(_msg, front_topic)
+                    rear_img = _decode_any_image(rear_msg, rear_topic)
+                    front_past1 = _decode_any_image(front_past1_msg, front_topic)
+                    front_past2 = _decode_any_image(front_past2_msg, front_topic)
             except Exception as exc:
                 print(f"[warn] image decode failed at ts={ts_ns}: {exc}")
                 continue
@@ -977,11 +1050,12 @@ def _load_config(config_path: Path):
 # ---------------------------------------------------------------------------
 _DEFAULT_CONFIG_YAML = """\
 topics:
-  front_camera: "/front/image_raw"
-  rear_camera: "/rear/image_raw"
-  gps: "/navsat/fix"
-  imu: "/imu/data"
-  odom: "/odometry/filtered"   # optional
+  front_camera: "/fisheye/front/image"
+  rear_camera:  "/fisheye/back/image"
+  gps:          "/j100_0519/sensors/gps_0/fix"
+  gps_heading:  "/j100_0519/sensors/gps_0/heading"
+  imu:          "/imu/data"
+  # dual_camera: "/fisheye/dual/image/compressed"  # alternative to front/rear
 
 sync:
   camera_hz: 10.0
@@ -989,6 +1063,7 @@ sync:
   gps_tol_s: 0.5
   imu_tol_s: 0.1
   min_speed_mps: 0.3
+  heading_source: "gps_heading"   # "gps_heading", "imu", "gps", or "odom"
 
 map:
   tile_cache: "/tmp/nomad_tile_cache"
@@ -1001,7 +1076,6 @@ data:
   max_wp_dist_m: 2.5
   wp_spacing_m: 0.5
   obs_size: 224
-  heading_source: "imu"   # "imu", "gps", or "odom"
 """
 
 

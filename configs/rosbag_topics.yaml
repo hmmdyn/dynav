@@ -18,48 +18,56 @@
 topics:
 
   # --- Front camera (primary observation) ---
-  front_camera: "/camera_front/color/image_raw"
+  # Insta360 X2/X3 front fisheye lens.
+  # If the bag was recorded with /fisheye/dual/image/compressed (recommended),
+  # set dual_camera instead and leave front_camera / rear_camera unset.
+  front_camera: "/fisheye/front/image"
   # Alternatives:
-  #   front_camera: "/camera_front/color/image_raw/compressed"   # compressed transport
-  #   front_camera: "/front/rgb/image_raw"                       # alternate Jackal namespace
-  #   front_camera: "/camera/color/image_raw"                    # single-camera setups
-  #   front_camera: "/realsense/color/image_raw"                 # RealSense-specific namespace
+  #   front_camera: "/fisheye/front/image/compressed"  # Insta360 compressed
+  #   front_camera: "/camera_front/color/image_raw"    # RealSense D435
+  #   front_camera: "/camera/color/image_raw"          # generic single-camera
 
   # --- Rear camera (supplemental observation) ---
-  rear_camera: "/camera_rear/color/image_raw"
+  rear_camera: "/fisheye/back/image"
   # Alternatives:
-  #   rear_camera: "/camera_rear/color/image_raw/compressed"
-  #   rear_camera: "/rear/rgb/image_raw"
-  #   rear_camera: "/camera_rear/image_raw"
+  #   rear_camera: "/fisheye/back/image/compressed"    # Insta360 compressed
+  #   rear_camera: "/camera_rear/color/image_raw"      # RealSense rear
+
+  # --- Dual fisheye (alternative to separate front/rear) ---
+  # When the bag contains the dual compressed stream, set dual_camera and
+  # leave front_camera / rear_camera commented out.  The extractor will split
+  # the image at the horizontal midpoint: left half → obs_0 (front),
+  # right half → obs_3 (rear).
+  #
+  # dual_camera: "/fisheye/dual/image/compressed"
 
   # --- GPS / GNSS fix ---
-  gps: "/navsat/fix"
+  # Clearpath J100 (namespace j100_0519) GPS fix.
+  gps: "/j100_0519/sensors/gps_0/fix"
   # Alternatives:
-  #   gps_fix: "/fix"                   # common GPSd bridge
-  #   gps_fix: "/gps/fix"               # Jackal default with UM7 GPS
-  #   gps_fix: "/gps/navsat"
-  #   gps_fix: "/piksi/navsatfix_best_fix"   # Piksi Multi RTK
+  #   gps: "/navsat/fix"               # generic NavSatFix
+  #   gps: "/fix"                      # GPSd bridge
+  #   gps: "/gps/fix"                  # older Jackal with UM7 GPS
+
+  # --- GPS heading ---
+  # Clearpath J100 compass heading as QuaternionStamped.
+  # Used when heading_source is "gps_heading" (see sync section below).
+  gps_heading: "/j100_0519/sensors/gps_0/heading"
+  # Alternatives:
+  #   gps_heading: ""   # leave empty to disable; fall back to "imu" or "gps"
 
   # --- IMU ---
+  # Insta360 madgwick-filtered IMU output.
   imu: "/imu/data"
-  # Alternatives (Microstrain GX5 series, common on research Jackals):
-  #   imu: "/microstrain/imu/data"
-  #   imu: "/gx5/imu/data"
-  #   imu: "/imu/data_raw"
-  # VectorNav:
-  #   imu: "/vectornav/IMU"
-  #   imu: "/vn100/imu/data"
-  # Generic:
-  #   imu: "/imu"
-
-  # --- Wheel odometry ---
-  odom: "/odometry/filtered"
   # Alternatives:
-  #   odom: "/jackal_velocity_controller/odom"   # raw wheel odom from Jackal base
-  #   odom: "/odom"                              # generic raw odom
-  #   odom: "/odometry/wheel"                    # explicit wheel-only odom
-  # Note: /odometry/filtered is the robot_localization EKF output (GPS+IMU+wheel).
-  # Prefer this when available; fall back to raw wheel odom if EKF is not running.
+  #   imu: "/imu/data_raw"             # raw Insta360 IMU (no orientation)
+  #   imu: "/microstrain/imu/data"     # Microstrain GX5 (some Jackals)
+
+  # --- Wheel odometry (optional) ---
+  # J100 does not expose an EKF-fused odometry topic by default.
+  # Uncomment if your setup publishes one.
+  #
+  # odom: "/j100_0519/odometry/filtered"
 
 # ---------------------------------------------------------------------------
 # sync — Time synchronization policy
@@ -89,6 +97,13 @@ sync:
   # training on uninformative samples with near-zero waypoint displacement.
   min_speed_mps: 0.3
 
+  # Source used to determine robot heading at each sampled frame.
+  #   "gps_heading" — QuaternionStamped from the GPS heading topic (default for J100)
+  #   "imu"         — orientation quaternion from sensor_msgs/Imu
+  #   "gps"         — bearing from consecutive GPS fixes (noisy at low speed)
+  #   "odom"        — yaw from odometry pose (requires odom topic)
+  heading_source: "gps_heading"
+
 # ---------------------------------------------------------------------------
 # map — OSM tile rendering settings
 # ---------------------------------------------------------------------------
@@ -111,7 +126,7 @@ map:
   # 17 → ~1.2m/pixel at the equator, covers ~300m radius at 512px.
   # Increase to 18 for finer detail (shorter routes); decrease to 16 for
   # longer routes covering more ground.
-  tile_zoom: 17
+  tile_zoom: 18
 
   # Internal render resolution (pixels) before downsampling to output_size.
   # Rendering at 2× output_size then downsampling with anti-aliasing gives
@@ -145,13 +160,3 @@ data:
   # Observation image size (pixels, square) for front and rear camera crops.
   # Must match data.image_size in default.yaml.
   obs_size: 224
-
-  # Source used to determine robot heading at each sampled frame.
-  #   "imu"  — quaternion from the IMU topic (most accurate heading rate,
-  #             but accumulates drift over long runs)
-  #   "gps"  — bearing computed from consecutive GPS fixes (robust over
-  #             long distances, but noisy at low speed; unusable below
-  #             min_speed_mps)
-  #   "odom" — yaw extracted from the odometry pose quaternion (good for
-  #             short runs with low wheel slip; drifts without EKF fusion)
-  heading_source: "imu"

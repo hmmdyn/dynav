@@ -8,7 +8,7 @@ The system consists of two models:
 1. **Map Navigation Model** (this phase): Uses a rendered OpenStreetMap image with route overlay + egocentric camera observations to predict relative waypoints for long-range navigation (500m–1km).
 2. **Semantic Navigation Model** (future phase): Uses CLIP+FiLM language conditioning + egocentric observations for last-mile navigation to a specific target.
 
-**Current Phase: Phase 1 — Map Navigation Model foundation implementation.**
+**Current Phase: Phase 1 — Data collection pipeline (Insta360 + Jackal J100) complete; ready for real-world training.**
 
 ## Architecture Summary
 
@@ -71,7 +71,9 @@ dynav/
 │   ├── default.yaml              # shared hyperparameters
 │   ├── ablation_no_direction.yaml
 │   ├── ablation_no_progress.yaml
-│   └── ablation_waypoint_only.yaml
+│   ├── ablation_waypoint_only.yaml
+│   ├── rosbag_topics.yaml        # extract_rosbag.py config (Insta360 + J100 defaults)
+│   └── record_topics.yaml        # record_bag.py config (topics to record)
 ├── dynav/
 │   ├── __init__.py
 │   ├── models/
@@ -101,7 +103,9 @@ dynav/
 │   ├── train.py
 │   ├── evaluate.py
 │   ├── sanity_check.py
-│   └── visualize_attention.py    # --per-head flag for per-head heatmaps
+│   ├── visualize_attention.py    # --per-head flag for per-head heatmaps
+│   ├── record_bag.py             # config-driven rosbag recording (Insta360 + J100)
+│   └── extract_rosbag.py         # rosbag → training samples
 └── tests/
     ├── test_encoders.py
     ├── test_decoders.py

@@ -1,0 +1,68 @@
+# record_topics.yaml
+# Configuration for scripts/record_bag.py
+#
+# Defines which ROS2 topics to record and how to store the bag.
+# Edit the lists below to match your hardware setup before recording.
+#
+# Usage:
+#   python scripts/record_bag.py --config configs/record_topics.yaml
+#   python scripts/record_bag.py --config configs/record_topics.yaml --duration 120
+#   python scripts/record_bag.py --config configs/record_topics.yaml --output ~/bags/run_01
+
+# ---------------------------------------------------------------------------
+# topics — ROS2 topics to include in the bag
+# ---------------------------------------------------------------------------
+topics:
+
+  # --- Camera ---
+  # Insta360 X2/X3: record the compressed dual stream to avoid frame drops.
+  # extract_rosbag.py will split front/back from the dual image at post-processing.
+  # See: https://github.com/ai4ce/insta360_ros_driver
+  - /fisheye/dual/image/compressed   # recommended: no frame-drop, split later
+
+  # Alternatives (if you need separate front/back topics at record time):
+  # - /fisheye/front/image
+  # - /fisheye/back/image
+
+  # --- GPS ---
+  # Clearpath J100 (j100_0519) GPS fix and heading
+  - /j100_0519/sensors/gps_0/fix      # sensor_msgs/NavSatFix
+  - /j100_0519/sensors/gps_0/heading  # geometry_msgs/QuaternionStamped
+
+  # --- IMU ---
+  # Record raw IMU from Insta360 — apply madgwick filter at post-processing
+  # to avoid locking in a specific filter configuration at record time.
+  - /imu/data_raw   # sensor_msgs/Imu (linear_accel + angular_vel only)
+
+  # Alternatives:
+  # - /imu/data     # filtered orientation (if madgwick is already running)
+
+  # --- Optional: odometry ---
+  # Uncomment if EKF-fused odometry is available on your setup.
+  # - /j100_0519/odometry/filtered
+
+# ---------------------------------------------------------------------------
+# output — Bag storage settings
+# ---------------------------------------------------------------------------
+output:
+
+  # Root directory for bags.  A timestamped subdirectory is created automatically
+  # unless --output is provided on the command line.
+  dir: "~/bags"
+
+  # Compression codec.  "zstd" is the default ROS2 Humble codec and gives good
+  # speed/ratio trade-off for image data.  Use "none" if you need max write speed.
+  compression: "zstd"
+
+# ---------------------------------------------------------------------------
+# recording — Behaviour settings
+# ---------------------------------------------------------------------------
+recording:
+
+  # Warn (but do not abort) if a topic is not yet being published when recording
+  # starts.  Useful for topics that start slightly after the driver launches.
+  warn_missing: true
+
+  # Minimum number of topics that must be active before starting.
+  # Set to 0 to skip pre-check entirely.
+  min_active_topics: 2
