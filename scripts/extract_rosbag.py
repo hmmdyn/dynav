@@ -692,20 +692,25 @@ class BagExtractor:
             if math.isnan(lat) or math.isnan(lon):
                 continue
 
-            # Speed check (use GPS-derived speed if available, else estimate)
-            gps_speed: Optional[float] = None
-            if hasattr(gps_msg, "speed") and not math.isnan(float(gps_msg.speed)):
-                gps_speed = float(gps_msg.speed)
-            else:
-                # Estimate from GPS trajectory
+            # Speed check — prefer odom twist over GPS-derived estimate.
+            # GPS-derived speed (haversine of consecutive fixes) is unreliable
+            # when using /gps/filtered because position smoothing reduces the
+            # apparent displacement between consecutive fixes at low speeds.
+            speed: Optional[float] = None
+            if odom_msgs:
+                odom_msg = self._find_nearest(odom_msgs, ts_ns, imu_tol_ns * 5)
+                if odom_msg is not None:
+                    speed = abs(float(odom_msg.twist.twist.linear.x))
+            if speed is None:
+                # Fallback: estimate from GPS trajectory
                 traj_idx = self._find_nearest_index(gps_traj, ts_ns)
                 if traj_idx is not None and traj_idx > 0:
                     prev_ts, prev_lat, prev_lon = gps_traj[traj_idx - 1]
                     cur_ts, cur_lat, cur_lon = gps_traj[traj_idx]
                     dt_s = (cur_ts - prev_ts) / NS_PER_S
                     if dt_s > 0:
-                        gps_speed = _haversine_m(prev_lat, prev_lon, cur_lat, cur_lon) / dt_s
-            if gps_speed is not None and gps_speed < min_speed:
+                        speed = _haversine_m(prev_lat, prev_lon, cur_lat, cur_lon) / dt_s
+            if speed is not None and speed < min_speed:
                 continue
 
             # Heading

@@ -66,12 +66,12 @@ topics:
   #   imu: "/imu/data"                 # Insta360 madgwick (camera frame — not recommended for heading)
   #   imu: "/microstrain/imu/data"     # Microstrain GX5 (some Jackals)
 
-  # --- Wheel odometry (optional) ---
-  # J100 EKF-filtered odometry (wheel odom + IMU). Recorded in bag but not
-  # directly used by extract_rosbag.py — navsat_transform_node consumes it
-  # at runtime to produce /gps/filtered.
-  #
-  # odom: "/j100_0519/platform/odom/filtered"
+  # --- Wheel odometry ---
+  # J100 EKF-filtered odometry (wheel odom + IMU, no GPS).
+  # Used by extract_rosbag.py for min_speed_mps filtering via twist.linear.x,
+  # which is more reliable than GPS-derived speed when using /gps/filtered
+  # (position smoothing reduces haversine-estimated speed at low speeds).
+  odom: "/j100_0519/platform/odom/filtered"
 
 # ---------------------------------------------------------------------------
 # sync — Time synchronization policy
