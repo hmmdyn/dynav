@@ -294,13 +294,18 @@ def generate_map(center_lat, center_lon, heading_deg,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def compute_heading(lats, lons, idx) -> float:
-    w = 10
+    # w=40 (±2s at 20Hz) — GPS 1Hz이므로 ±0.5s(w=10)는 동일 GPS 구간에 걸려
+    # atan2(0,0)=0 오류 발생. ±2s로 GPS 최소 2개 구간을 확보.
+    w = 40
     i0, i1 = max(0, idx-w), min(len(lats)-1, idx+w)
-    if i0 == i1: return 0.0
+    if i0 == i1:
+        return 0.0
     dlat = lats[i1] - lats[i0]
     dlon = lons[i1] - lons[i0]
     dN = dlat * 111_000
     dE = dlon * math.cos(math.radians(lats[idx])) * 111_000
+    if dN == 0.0 and dE == 0.0:
+        return 0.0
     return math.degrees(math.atan2(dE, dN))
 
 def gps_to_body(cur_lat, cur_lon, fut_lat, fut_lon, hdg_deg):
@@ -471,11 +476,10 @@ def process_ride(ride_id: str, ride_data: dict, data_root: Path) -> tuple[int, i
     all_lon = [lon for seg in segments for lon in seg["frame_lon"]]
     gps_track = list(zip(all_lat, all_lon))
 
-    # 샘플 생성
+    # 샘플 생성 — gps_track은 ride 전체(세그먼트 합)로 넘겨 지도에 넓은 경로 표시
     n_samples = 0
     for seg in segments:
-        seg_track = list(zip(seg["frame_lat"], seg["frame_lon"]))
-        n_samples += build_samples_for_segment(seg, frames_dir, split_dir, seg_track)
+        n_samples += build_samples_for_segment(seg, frames_dir, split_dir, gps_track)
 
     return n_frames, n_samples
 
