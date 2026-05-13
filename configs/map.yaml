@@ -1,0 +1,66 @@
+# configs/map.yaml — Shared map rendering configuration
+#
+# ALL pipelines (rosbag extraction, FrodoBots building, inference ROS node)
+# MUST use these values unchanged to guarantee training/inference consistency.
+# Do not override zoom, output_size, or marker parameters per-pipeline.
+
+# ---------------------------------------------------------------------------
+# Tile server
+# ---------------------------------------------------------------------------
+
+# CartoDB Positron (no labels) — clean base map, no text leaking semantic info.
+tile_url: "https://cartodb-basemaps-a.global.ssl.fastly.net/light_nolabels/{z}/{x}/{y}.png"
+# Alternatives:
+#   tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png"   # standard OSM (has labels)
+
+# Local disk cache for downloaded tiles.  Shared across all runs on the same machine.
+tile_cache: "/tmp/dynav_tile_cache"
+
+# OSM zoom level. 19 is the maximum standard level (~0.3 m/px near the equator).
+# Must be identical at training and inference.
+tile_zoom: 19
+
+# ---------------------------------------------------------------------------
+# Canvas and output geometry
+# ---------------------------------------------------------------------------
+
+# Internal render canvas size (px) before heading-up rotation.
+# Formula: canvas_px = ceil(render_size * sqrt(2)) + 2*256
+# → render_size=512 → canvas_px ≈ 1236  (no grey corners at any heading)
+render_size: 512
+
+# Final square image size (px) fed to MapEncoder. Must match model.map_image_size.
+output_size: 224
+
+# ---------------------------------------------------------------------------
+# Rendering mode
+# ---------------------------------------------------------------------------
+
+# "rgb"    — OSM tile RGB + coloured overlays. Use ImageNet normalisation.
+# "hybrid" — Semantic channels: R=OSM gray, G=route mask, B=position+goal.
+#             Use per-channel normalisation (see configs/default.yaml).
+mode: "rgb"
+
+# ---------------------------------------------------------------------------
+# OSRM routing
+# ---------------------------------------------------------------------------
+
+osrm_url: "https://router.project-osrm.org"
+osrm_profile: "foot"
+
+# GPS snap radius per point (metres).
+# Tighter for EKF-filtered rosbag GPS; wider for noisy 1-Hz FrodoBots GPS.
+osrm_match_radius_rosbag: 25.0
+osrm_match_radius_frodobots: 50.0
+
+# Episodes/segments where the mean GPS-to-matched-route deviation exceeds
+# this threshold are discarded (path not represented in OSM).
+osrm_valid_threshold_m: 10.0
+
+# ---------------------------------------------------------------------------
+# hybrid mode only
+# ---------------------------------------------------------------------------
+
+# Gaussian σ for the route soft mask channel (G).
+# At zoom 19, 1 m ≈ 3 px, so σ=8 px ≈ 2.7 m — absorbs typical GPS error.
+route_sigma_px: 8.0

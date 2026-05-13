@@ -48,3 +48,10 @@ data:
   map_image_size: 224
   normalize_waypoints: true
   max_waypoint_distance: 2.5        # meters, for normalization
+
+  # Map image normalisation — must match the mode used during dataset building.
+  # rgb mode:    use ImageNet statistics (EfficientNet-B0 pretrained compatible)
+  # hybrid mode: per-channel statistics (set in ablation_map_hybrid.yaml)
+  map_mode: "rgb"
+  map_normalize_mean: [0.485, 0.456, 0.406]
+  map_normalize_std:  [0.229, 0.224, 0.225]

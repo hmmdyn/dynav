@@ -1,3 +1,0 @@
-[submodule "osmnav"]
-	path = osmnav
-	url = git@github.com:hmmdyn/osmnav.git
