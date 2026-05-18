@@ -1,0 +1,25 @@
+# configs/paths.yaml — Environment-specific data paths.
+#
+# Override these values for different machines / data layouts.
+# CLI flag --paths-config points the build script here.
+# Env vars take precedence when set:
+#   DYNAV_FRODO_ROOT    → frodo_root
+#   DYNAV_DATASET_ROOT  → dataset_root
+#   DYNAV_TILE_CACHE    → tile_cache  (also overrides map.yaml tile_cache)
+#   DYNAV_OSM_CACHE     → osm_cache   (Overpass JSON cache)
+
+# ---------------------------------------------------------------------------
+# FrodoBots source data (output_rides_* + valid_segments_*.json)
+# ---------------------------------------------------------------------------
+frodo_root: /home/hmmdyn/data/frodobots
+
+# ---------------------------------------------------------------------------
+# Dataset output root  (train/, val/, gifs/, frames/ live here)
+# ---------------------------------------------------------------------------
+dataset_root: /home/hmmdyn/data/frodobots/dataset
+
+# ---------------------------------------------------------------------------
+# Caches  (can be on a fast SSD; shared across runs)
+# ---------------------------------------------------------------------------
+tile_cache: /home/hmmdyn/data/frodobots/dataset/osm_cache
+osm_cache:  /home/hmmdyn/data/frodobots/dataset/osm_net_cache

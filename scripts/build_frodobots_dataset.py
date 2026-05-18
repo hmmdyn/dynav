@@ -1,480 +1,490 @@
 """Build dynav training dataset from FrodoBots ride data.
 
-Replaces build_frodobots_dataset.py (v1) and build_frodobots_dataset_v2.py.
-Uses dynav.map for all map rendering — identical output to extract_rosbag.py.
+Route generation (per segment):
+    Raw segment GPS → fetch_ped_network() → snap_trajectory() (quality gate)
+    → snap_trajectory_graph() → OSM-snapped route for map rendering.
 
-Data layout expected on disk (configure via --frodo-root):
+Segments where mean GPS↔OSM-edge distance > osm_snap_thresh_m are skipped.
+
+Data layout expected on disk (configure via configs/paths.yaml or env vars):
     <frodo_root>/
-        output_rides_0/   output_rides_2/   output_rides_23/
-            <ride_id>/
-                recordings/          ← .ts video files
-                camera_timestamps.csv
-                gps_data.csv
         valid_segments_rides0.json
         valid_segments_rides2.json
         valid_segments_v2.json
+        dataset/
+            frames/
+                ride_XXXXX/
+                    XXXXXX.jpg   ← pre-extracted every OBS_STRIDE frames
 
-Route generation (per segment):
-    Raw GPS → segment_gps_episode() → OSRM /match → OSM-snapped route
-    Segments where mean GPS↔route deviation > 10 m are skipped.
+Outputs:
+    <dataset_root>/train/sample_{ride_id}_{frame_id:07d}/  obs_0..3.png map.png meta.json
+    <dataset_root>/val/  …
+    <dataset_root>/gifs/ ride_{ride_id}_seg_{seg_idx}.gif
+    <dataset_root>/gifs/ manifest.json
 
 Usage::
 
+    python scripts/build_frodobots_dataset.py
     python scripts/build_frodobots_dataset.py \\
-        --frodo-root ~/data/frodobots \\
-        --output data/ \\
-        [--map-config configs/map.yaml]
+        --map-config configs/map.yaml \\
+        --paths-config configs/paths.yaml
+
+Filter params can also be overridden via env vars (used by GUI):
+    DYNAV_OSM_SNAP_THRESH   DYNAV_NET_DISP   DYNAV_SPEED
+    DYNAV_STRAIGHTNESS       DYNAV_SAMPLE_STRIDE
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
-import shutil
-import subprocess
+import os
 import sys
-import tempfile
-from collections import defaultdict
+import time
 from pathlib import Path
-from typing import Optional
 
+import cv2
 import numpy as np
 from PIL import Image
 
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
 
-from dynav.map import MapRenderer, OSRMRouter, is_route_valid  # noqa: E402
-from dynav.map.routing import OSRMMatchError  # noqa: E402
-from dynav.utils.geometry import compute_route_direction  # noqa: E402
-
-try:
-    from tqdm import tqdm as _tqdm
-    def _progress(it, **kw):
-        return _tqdm(it, **kw)
-except ImportError:
-    def _progress(it, **kw):
-        return it
+from dynav.map import MapRenderer
+from dynav.map.tiles import TileCache
+from dynav.map.osm_snap import (
+    bearing_deg,
+    fetch_ped_network,
+    snap_trajectory,
+    snap_trajectory_graph,
+)
 
 # ---------------------------------------------------------------------------
-# Constants (FrodoBots-specific)
+# Constants
 # ---------------------------------------------------------------------------
-FPS            = 20
-OBS_STRIDE     = 10   # frames between obs_0/1/2  (0.5 s @ 20 Hz)
-SAMPLE_STRIDE  = 20   # frames between consecutive samples (1 s)
-N_WAYPOINTS    = 5
-WAYPOINT_FRAMES = [FPS * (i + 1) for i in range(N_WAYPOINTS)]  # [20,40,60,80,100]
-MAX_WP_DIST_M  = 2.5
-IMAGE_SIZE     = 224
+OBS_STRIDE      = 10            # frames between obs_0/1/2/3 (0.5 s @ 20 fps)
+SAMPLE_STRIDE   = 20            # frames between consecutive samples (1 s)
+WP_FRAMES       = [20, 40, 60, 80, 100]   # 1–5 s lookahead at 20 fps
+MAX_WP_M        = 2.5           # waypoint normalisation radius (metres)
+IMAGE_SIZE      = 224
+GIF_N_FRAMES    = 60
+GIF_DURATION_S  = 5.0
+R_EARTH         = 6_371_000.0
 
-OBS_PAD = OBS_STRIDE * 2        # minimum lead frames for obs history
-WP_PAD  = WAYPOINT_FRAMES[-1]   # minimum trailing frames for waypoints
+MIN_SEG_FRAMES  = WP_FRAMES[-1] + OBS_STRIDE * 3 + 10
 
-EARTH_R = 6_371_000.0
+SEG_FILES = [
+    "valid_segments_rides0.json",
+    "valid_segments_rides2.json",
+    "valid_segments_v2.json",
+]
+
+
+# ---------------------------------------------------------------------------
+# Default filter thresholds (overridable by env vars)
+# ---------------------------------------------------------------------------
+OSM_SNAP_THRESH    = float(os.environ.get("DYNAV_OSM_SNAP_THRESH", "10.0"))
+SEG_MIN_NET_DISP_M = float(os.environ.get("DYNAV_NET_DISP",        "10.0"))
+SEG_MIN_SPEED_MS   = float(os.environ.get("DYNAV_SPEED",           "0.7"))
+SEG_MIN_STRAIGHT   = float(os.environ.get("DYNAV_STRAIGHTNESS",    "0.75"))
+_SAMPLE_STRIDE     = int(  os.environ.get("DYNAV_SAMPLE_STRIDE",   "20"))
 
 
 # ---------------------------------------------------------------------------
 # Geodesy helpers
 # ---------------------------------------------------------------------------
-def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    d_lat = math.radians(lat2 - lat1)
-    d_lon = math.radians(lon2 - lon1)
-    a = (math.sin(d_lat / 2) ** 2
-         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
-         * math.sin(d_lon / 2) ** 2)
-    return 2.0 * EARTH_R * math.asin(math.sqrt(a))
-
-
 def _gps_to_body(
-    cur_lat: float, cur_lon: float,
-    fut_lat: float, fut_lon: float,
-    hdg_deg: float,
+    lat: float, lon: float,
+    lat_cur: float, lon_cur: float,
+    heading_deg: float,
 ) -> tuple[float, float]:
     """Convert future GPS position to robot body frame (x=forward, y=left)."""
-    d_lat = math.radians(fut_lat - cur_lat)
-    d_lon = math.radians(fut_lon - cur_lon)
-    north_m = d_lat * EARTH_R
-    east_m  = d_lon * EARTH_R * math.cos(math.radians(cur_lat))
-    h = math.radians(hdg_deg)
-    dx = north_m * math.cos(h) + east_m * math.sin(h)
-    dy = -north_m * math.sin(h) + east_m * math.cos(h)
-    return dx, dy
+    north = (lat - lat_cur) * R_EARTH * math.pi / 180.0
+    east  = (lon - lon_cur) * R_EARTH * math.pi / 180.0 * math.cos(math.radians(lat_cur))
+    h = math.radians(heading_deg)
+    x =  north * math.cos(h) + east * math.sin(h)
+    y = -north * math.sin(h) + east * math.cos(h)
+    return float(np.clip(x / MAX_WP_M, -1.0, 1.0)), float(np.clip(y / MAX_WP_M, -1.0, 1.0))
 
 
-def _compute_heading(lats: list[float], lons: list[float], idx: int) -> float:
-    """Estimate compass heading at *idx* from surrounding GPS points."""
-    w = 40  # ±2 s at 20 Hz — wide enough to span multiple 1-Hz GPS samples
-    i0 = max(0, idx - w)
-    i1 = min(len(lats) - 1, idx + w)
-    if i0 == i1:
-        return 0.0
-    d_lat = lats[i1] - lats[i0]
-    d_lon = lons[i1] - lons[i0]
-    north_m = d_lat * 111_000.0
-    east_m  = d_lon * math.cos(math.radians(lats[idx])) * 111_000.0
-    if north_m == 0.0 and east_m == 0.0:
-        return 0.0
-    return math.degrees(math.atan2(east_m, north_m)) % 360.0
+def _route_direction(
+    lat: float, lon: float,
+    lat_dest: float, lon_dest: float,
+    heading_deg: float,
+) -> float:
+    """Angle to destination in robot body frame (radians, atan2 convention)."""
+    north = (lat_dest - lat) * R_EARTH * math.pi / 180.0
+    east  = (lon_dest - lon) * R_EARTH * math.pi / 180.0 * math.cos(math.radians(lat))
+    h = math.radians(heading_deg)
+    bx =  north * math.cos(h) + east * math.sin(h)
+    by = -north * math.sin(h) + east * math.cos(h)
+    return float(math.atan2(by, bx))
 
 
 # ---------------------------------------------------------------------------
-# Timestamp / frame index helpers
+# GIF generation
 # ---------------------------------------------------------------------------
-def _parse_ts_ms(stem: str) -> int:
-    """Extract Unix-ms timestamp from a .ts filename stem."""
-    ts_str = stem.split("_")[-1][:17]
-    from datetime import datetime, timezone
-    s = ts_str
-    dt = datetime(int(s[0:4]), int(s[4:6]), int(s[6:8]),
-                  int(s[8:10]), int(s[10:12]), int(s[12:14]),
-                  int(s[14:17]) * 1000, tzinfo=timezone.utc)
-    return int(dt.timestamp() * 1000)
-
-
-def _build_ts_index(recordings_dir: Path) -> list[tuple[float, Path]]:
-    """Return [(start_ts_s, ts_path), ...] sorted by start time."""
-    files = sorted(recordings_dir.glob("*uid_s_1000*uid_e_video*.ts"))
-    return [(_parse_ts_ms(p.stem) / 1000.0, p) for p in files]
-
-
-def _load_camera_csv(cam_csv: Path) -> list[tuple[int, float]]:
-    with open(cam_csv) as f:
-        return [(int(r["frame_id"]), float(r["timestamp"]))
-                for r in csv.DictReader(f)]
-
-
-def _frame_to_ts_local(
-    ts_index: list[tuple[float, Path]],
-    frame_ts_s: float,
-) -> Optional[tuple[Path, int]]:
-    """Map a camera timestamp to (ts_file, local_frame_idx)."""
-    lo, hi = 0, len(ts_index) - 1
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if ts_index[mid][0] <= frame_ts_s:
-            lo = mid
-        else:
-            hi = mid - 1  # pylint: disable=unused-variable
-    ts_start, ts_path = ts_index[lo]
-    local_idx = round((frame_ts_s - ts_start) * FPS)
-    if local_idx < 0:
-        return None
-    return ts_path, local_idx
-
-
-def _extract_frames(
-    cam_list: list[tuple[int, float]],
-    ts_index: list[tuple[float, Path]],
-    needed_fids: set[int],
-    frames_dir: Path,
+def _make_gif(
+    flats: list[float],
+    flons: list[float],
+    snapped: list[tuple[float, float]],
+    dest_lat: float,
+    dest_lon: float,
+    gif_path: Path,
+    renderer: MapRenderer,
 ) -> None:
-    """Extract only the needed frames from .ts files via ffmpeg."""
-    frames_dir.mkdir(parents=True, exist_ok=True)
-    missing = {fid for fid in needed_fids
-               if not (frames_dir / f"{fid:06d}.jpg").exists()}
-    if not missing:
+    n_seg = len(flats)
+    n = min(GIF_N_FRAMES, n_seg)
+    idxs = [int(round(i * (n_seg - 1) / (n - 1))) for i in range(n)]
+    frames: list[Image.Image] = []
+    for i in idxs:
+        w = 40
+        i0 = max(0, i - w)
+        i1 = min(n_seg - 1, i + w)
+        hdg = bearing_deg(flats[i0], flons[i0], flats[i1], flons[i1])
+        pil = renderer.render(
+            lat=flats[i], lon=flons[i],
+            heading_deg=hdg,
+            route_latlons=snapped,
+            goal_lat=dest_lat,
+            goal_lon=dest_lon,
+        )
+        if pil is not None:
+            frames.append(pil)
+    if not frames:
         return
-
-    fid_to_ts = {fid: ts for fid, ts in cam_list if fid in missing}
-    ts_groups: dict[Path, list[tuple[int, int]]] = defaultdict(list)
-    for fid, ts_s in fid_to_ts.items():
-        result = _frame_to_ts_local(ts_index, ts_s)
-        if result is None:
-            continue
-        ts_path, local_idx = result
-        ts_groups[ts_path].append((fid, local_idx))
-
-    for ts_path, frame_list in ts_groups.items():
-        if not ts_path.exists():
-            continue
-        with tempfile.TemporaryDirectory() as tmpdir:
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", str(ts_path),
-                 "-q:v", "3", "-vf", f"scale={IMAGE_SIZE}:{IMAGE_SIZE}",
-                 f"{tmpdir}/%06d.jpg"],
-                capture_output=True,
-            )
-            for global_fid, local_idx in frame_list:
-                src = Path(tmpdir) / f"{local_idx + 1:06d}.jpg"
-                dst = frames_dir / f"{global_fid:06d}.jpg"
-                if src.exists() and not dst.exists():
-                    shutil.move(str(src), str(dst))
-
-
-# ---------------------------------------------------------------------------
-# Dataset builder
-# ---------------------------------------------------------------------------
-class FrodoBotsBuilder:
-    """Build a dynav dataset from FrodoBots source data.
-
-    Args:
-        frodo_root: Directory containing ``output_rides_*`` and JSON files.
-        output_dir: Root output directory for the dataset.
-        renderer:   Shared MapRenderer instance.
-        router:     Shared OSRMRouter instance.
-        threshold_m: Max GPS↔route deviation to accept a segment.
-    """
-
-    SOURCES = [
-        ("output_rides_0",  "valid_segments_rides0.json"),
-        ("output_rides_2",  "valid_segments_rides2.json"),
-        ("output_rides_23", "valid_segments_v2.json"),
-    ]
-
-    def __init__(
-        self,
-        frodo_root: Path,
-        output_dir: Path,
-        renderer: MapRenderer,
-        router: OSRMRouter,
-        threshold_m: float = 10.0,
-    ) -> None:
-        self.frodo_root  = frodo_root
-        self.output_dir  = output_dir
-        self.renderer    = renderer
-        self.router      = router
-        self.threshold_m = threshold_m
-        self.frames_root = output_dir / "frames"
-
-    # ------------------------------------------------------------------
-
-    def build(self) -> dict[str, int]:
-        """Run the full build pipeline.
-
-        Returns:
-            {"train": n_train, "val": n_val} sample counts.
-        """
-        (self.output_dir / "train").mkdir(parents=True, exist_ok=True)
-        (self.output_dir / "val").mkdir(parents=True, exist_ok=True)
-
-        counts: dict[str, int] = {"train": 0, "val": 0}
-
-        for rides_name, seg_json_name in self.SOURCES:
-            rides_dir = self.frodo_root / rides_name
-            seg_path  = self.frodo_root / seg_json_name
-            if not rides_dir.exists() or not seg_path.exists():
-                print(f"[skip] {rides_name}: directory or segment JSON not found")
-                continue
-
-            with open(seg_path) as f:
-                segments: list[dict] = json.load(f)
-
-            print(f"[build] {rides_name}: {len(segments)} segments")
-            for seg in _progress(segments, desc=rides_name, leave=False):
-                n = self._build_segment(seg, rides_dir)
-                counts["train"] += n.get("train", 0)
-                counts["val"]   += n.get("val", 0)
-
-        print(f"[build] done — train={counts['train']}, val={counts['val']}")
-        return counts
-
-    # ------------------------------------------------------------------
-
-    def _build_segment(
-        self,
-        seg: dict,
-        rides_dir: Path,
-    ) -> dict[str, int]:
-        """Process one segment: OSRM match, frame extraction, sample writing."""
-        ride_id = seg["ride_id"]
-        fids    = seg["frame_ids"]
-        lats    = seg["frame_lat"]
-        lons    = seg["frame_lon"]
-        n       = len(fids)
-
-        if n < OBS_PAD + WP_PAD + 1:
-            return {}
-
-        split = "val" if int(ride_id) % 10 == 0 else "train"
-        split_dir = self.output_dir / split
-
-        # Unique GPS points (1-Hz, many frames share the same GPS)
-        unique_latlons = list(dict.fromkeys(zip(lats, lons)))
-        if len(unique_latlons) < 2:
-            return {}
-
-        # --- OSRM map matching (once per segment) ---
-        try:
-            matched_route, avg_dev = self.router.match(
-                unique_latlons, radius_m=50.0
-            )
-        except OSRMMatchError as exc:
-            print(f"[skip] ride={ride_id}: OSRM match failed: {exc}")
-            return {}
-
-        if not is_route_valid(matched_route, unique_latlons, self.threshold_m):
-            print(f"[skip] ride={ride_id}: avg_dev={avg_dev:.1f}m > {self.threshold_m}m")
-            return {}
-
-        goal_lat, goal_lon = unique_latlons[-1]
-
-        # --- Determine which frames we need ---
-        i_start = OBS_PAD
-        i_end   = n - 1 - WP_PAD
-        if i_end <= i_start:
-            return {}
-
-        sample_indices = list(range(i_start, i_end + 1, SAMPLE_STRIDE))
-        needed_fids: set[int] = set()
-        for local_i in sample_indices:
-            needed_fids.add(fids[local_i])
-            needed_fids.add(fids[local_i - OBS_STRIDE])
-            needed_fids.add(fids[local_i - 2 * OBS_STRIDE])
-            needed_fids.add(fids[min(n - 1, local_i + OBS_STRIDE)])  # rear ≈ forward shifted
-
-        # --- Extract frames from .ts files ---
-        ride_dir    = rides_dir / ride_id
-        frames_dir  = self.frames_root / f"ride_{ride_id}"
-        recordings  = ride_dir / "recordings"
-        cam_csv     = ride_dir / "camera_timestamps.csv"
-
-        if not recordings.exists() or not cam_csv.exists():
-            return {}
-
-        ts_index = _build_ts_index(recordings)
-        cam_list = _load_camera_csv(cam_csv)
-        _extract_frames(cam_list, ts_index, needed_fids, frames_dir)
-
-        # --- Write samples ---
-        written: dict[str, int] = {"train": 0, "val": 0}
-
-        for local_i in sample_indices:
-            fid_cur   = fids[local_i]
-            fid_past1 = fids[local_i - OBS_STRIDE]
-            fid_past2 = fids[local_i - 2 * OBS_STRIDE]
-            fid_rear  = fids[min(n - 1, local_i + OBS_STRIDE)]
-
-            # Observation frames must exist on disk
-            def _img(fid: int) -> Optional[Image.Image]:
-                p = frames_dir / f"{fid:06d}.jpg"
-                if not p.exists():
-                    return None
-                return Image.open(p).convert("RGB")
-
-            obs0 = _img(fid_cur)
-            obs1 = _img(fid_past1)
-            obs2 = _img(fid_past2)
-            obs3 = _img(fid_rear)
-            if any(o is None for o in (obs0, obs1, obs2, obs3)):
-                continue
-
-            cur_lat = lats[local_i]
-            cur_lon = lons[local_i]
-            hdg_deg = _compute_heading(lats, lons, local_i)
-
-            # Map image
-            map_img = self.renderer.render(
-                lat=cur_lat,
-                lon=cur_lon,
-                heading_deg=hdg_deg,
-                route_latlons=matched_route,
-                goal_lat=goal_lat,
-                goal_lon=goal_lon,
-            )
-            if map_img is None:
-                continue
-
-            # GT waypoints
-            waypoints = []
-            for wp_frames in WAYPOINT_FRAMES:
-                wi = min(local_i + wp_frames, n - 1)
-                dx, dy = _gps_to_body(cur_lat, cur_lon, lats[wi], lons[wi], hdg_deg)
-                x_norm = max(-1.0, min(1.0, dx / MAX_WP_DIST_M))
-                y_norm = max(-1.0, min(1.0, dy / MAX_WP_DIST_M))
-                waypoints.append([round(x_norm, 5), round(y_norm, 5)])
-
-            # route_direction: radians, body frame
-            enu_heading = math.radians(90.0 - hdg_deg)
-            route_dir_rad = compute_route_direction(
-                np.array([cur_lat, cur_lon]),
-                np.array(matched_route),
-                enu_heading,
-                lookahead_distance=10.0,
-            )
-
-            # Write sample directory
-            sample_name = f"sample_{ride_id}_{fid_cur:07d}"
-            sample_dir  = split_dir / sample_name
-            sample_dir.mkdir(exist_ok=True)
-
-            obs0.resize((IMAGE_SIZE, IMAGE_SIZE), Image.LANCZOS).save(sample_dir / "obs_0.png")
-            obs1.resize((IMAGE_SIZE, IMAGE_SIZE), Image.LANCZOS).save(sample_dir / "obs_1.png")
-            obs2.resize((IMAGE_SIZE, IMAGE_SIZE), Image.LANCZOS).save(sample_dir / "obs_2.png")
-            obs3.resize((IMAGE_SIZE, IMAGE_SIZE), Image.LANCZOS).save(sample_dir / "obs_3.png")
-            map_img.save(sample_dir / "map.png")
-
-            meta = {
-                "ride_id":         ride_id,
-                "frame_id":        fid_cur,
-                "lat":             cur_lat,
-                "lon":             cur_lon,
-                "heading_deg":     hdg_deg,
-                "goal_lat":        goal_lat,
-                "goal_lon":        goal_lon,
-                "gt_waypoints":    waypoints,
-                "route_direction": float(route_dir_rad),
-            }
-            with open(sample_dir / "meta.json", "w") as fh:
-                json.dump(meta, fh, indent=2)
-
-            written[split] += 1
-
-        return written
-
-
-# ---------------------------------------------------------------------------
-# Config loader
-# ---------------------------------------------------------------------------
-def _load_map_config(map_config_path: Path):
-    from omegaconf import OmegaConf
-    return OmegaConf.load(map_config_path)
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Build dynav dataset from FrodoBots ride data."
+    dur_ms = max(50, int(GIF_DURATION_S * 1000 / len(frames)))
+    frames[0].save(
+        gif_path, save_all=True, append_images=frames[1:],
+        duration=dur_ms, loop=0, optimize=False,
     )
-    parser.add_argument("--frodo-root", type=Path, required=True, metavar="DIR",
-                        help="FrodoBots data root (contains output_rides_* and JSON files).")
-    parser.add_argument("--output", type=Path, required=True, metavar="DIR",
-                        help="Dataset output root directory.")
-    parser.add_argument("--map-config", type=Path,
-                        default=_REPO / "configs" / "map.yaml", metavar="YAML",
-                        help="Path to map.yaml (default: configs/map.yaml).")
-    return parser.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Per-segment processing
+# ---------------------------------------------------------------------------
+def _process_segment(
+    ride_id: str,
+    seg: dict,
+    frame_dir: Path,
+    train_dir: Path,
+    val_dir: Path,
+    gif_dir: Path,
+    renderer: MapRenderer,
+    osm_cache_dir: Path,
+    sample_stride: int,
+) -> tuple[list[dict], str, dict] | None:
+    """
+    Returns (samples_list, gif_key, gif_meta) or None if filtered.
+    """
+    fids  = seg["frame_ids"]
+    flats = seg["frame_lat"]
+    flons = seg["frame_lon"]
+    n_seg = len(fids)
+
+    # Quality pre-filter
+    if (n_seg < MIN_SEG_FRAMES
+            or seg.get("net_disp_m",   0) < SEG_MIN_NET_DISP_M
+            or seg.get("avg_speed_ms", 0) < SEG_MIN_SPEED_MS
+            or seg.get("straightness", 0) < SEG_MIN_STRAIGHT):
+        return None
+
+    # OSM pedestrian snap (quality gate)
+    center_lat = flats[n_seg // 2]
+    center_lon = flons[n_seg // 2]
+    try:
+        edges, all_pts = fetch_ped_network(
+            center_lat, center_lon, radius_m=400, cache_dir=osm_cache_dir)
+    except Exception:
+        return None
+    if len(edges) < 5:
+        return None
+
+    mid  = n_seg // 2
+    qlen = max(1, n_seg // 4)
+    _, mean_dist = snap_trajectory(
+        flats[mid - qlen : mid + qlen],
+        flons[mid - qlen : mid + qlen],
+        edges, all_pts,
+    )
+    if mean_dist >= OSM_SNAP_THRESH:
+        return None
+
+    # Full graph-aware snap (route for display)
+    snapped = snap_trajectory_graph(flats, flons, edges, all_pts)
+    dest_lat, dest_lon = snapped[-1]
+
+    # Valid sample indices
+    margin        = WP_FRAMES[-1] + 5
+    valid_indices = [
+        i for i in range(OBS_STRIDE * 3, n_seg - margin)
+        if i % sample_stride == 0
+    ]
+    if not valid_indices:
+        return None
+
+    split    = "val" if int(ride_id) % 10 == 0 else "train"
+    out_base = val_dir if split == "val" else train_dir
+
+    samples: list[dict] = []
+    for idx in valid_indices:
+        w   = 40
+        i0  = max(0, idx - w)
+        i1  = min(n_seg - 1, idx + w)
+        heading = bearing_deg(flats[i0], flons[i0], flats[i1], flons[i1])
+        lat_cur, lon_cur = flats[idx], flons[idx]
+
+        # GT waypoints
+        waypoints = []
+        for wf in WP_FRAMES:
+            wi = min(idx + wf, n_seg - 1)
+            waypoints.append(list(_gps_to_body(flats[wi], flons[wi], lat_cur, lon_cur, heading)))
+
+        rd       = _route_direction(lat_cur, lon_cur, dest_lat, dest_lon, heading)
+        frame_id = fids[idx]
+        sname    = f"sample_{ride_id}_{frame_id:07d}"
+        sdir     = out_base / sname
+        sdir.mkdir(parents=True, exist_ok=True)
+
+        # Observation images
+        for oi, fidx in enumerate([idx, idx - OBS_STRIDE, idx - OBS_STRIDE * 2, idx - OBS_STRIDE * 3]):
+            fid      = fids[fidx]
+            img_path = frame_dir / f"{fid:06d}.jpg"
+            img      = cv2.imread(str(img_path))
+            if img is None:
+                img = np.zeros((IMAGE_SIZE, IMAGE_SIZE, 3), dtype=np.uint8)
+            cv2.imwrite(str(sdir / f"obs_{oi}.png"), cv2.resize(img, (IMAGE_SIZE, IMAGE_SIZE)))
+
+        # Map image via MapRenderer
+        map_pil = renderer.render(
+            lat=lat_cur, lon=lon_cur,
+            heading_deg=heading,
+            route_latlons=snapped,
+            goal_lat=dest_lat,
+            goal_lon=dest_lon,
+        )
+        if map_pil is None:
+            continue
+        map_pil.save(str(sdir / "map.png"))
+
+        meta = {
+            "source":          "frodobots",
+            "ride_id":         ride_id,
+            "seg_idx":         seg["seg_idx"],
+            "frame_id":        frame_id,
+            "lat":             lat_cur,
+            "lon":             lon_cur,
+            "heading_deg":     heading,
+            "goal_lat":        dest_lat,
+            "goal_lon":        dest_lon,
+            "gt_waypoints":    waypoints,
+            "route_direction": rd,
+            "map_mode":        "rgb",
+            "osm_snap_mean_m": round(mean_dist, 2),
+            "net_disp_m":      seg.get("net_disp_m"),
+            "avg_speed_ms":    seg.get("avg_speed_ms"),
+            "straightness":    seg.get("straightness"),
+        }
+        (sdir / "meta.json").write_text(json.dumps(meta, indent=2))
+        samples.append({"name": sname, "split": split})
+
+    if not samples:
+        return None
+
+    # GIF
+    gif_name = f"ride_{ride_id}_seg_{seg['seg_idx']}.gif"
+    gif_path = gif_dir / gif_name
+    _make_gif(flats, flons, snapped, dest_lat, dest_lon, gif_path, renderer)
+
+    gif_key  = f"gifs/{gif_name}"
+    gif_meta = {
+        "gif":             gif_key,
+        "ride_id":         ride_id,
+        "seg_idx":         seg["seg_idx"],
+        "split":           split,
+        "osm_snap_mean_m": round(mean_dist, 2),
+        "net_disp_m":      seg.get("net_disp_m"),
+        "avg_speed_ms":    seg.get("avg_speed_ms"),
+        "straightness":    seg.get("straightness"),
+        "n_samples":       len(samples),
+        "samples":         [s["name"] for s in samples],
+    }
+    return samples, gif_key, gif_meta
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def _load_yaml(path: Path) -> dict:
+    """Load YAML file, preferring omegaconf then falling back to PyYAML."""
+    try:
+        from omegaconf import OmegaConf
+        return OmegaConf.load(path)
+    except ImportError:
+        import yaml
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
 
 
 def main() -> None:
     args = _parse_args()
 
-    map_cfg_path = args.map_config.resolve()
-    if not map_cfg_path.exists():
-        print(f"[error] map config not found: {map_cfg_path}", file=sys.stderr)
-        sys.exit(1)
+    # Load configs
+    map_cfg_raw  = _load_yaml(args.map_config)
+    path_cfg_raw = _load_yaml(args.paths_config)
 
-    # Wrap map config in a namespace expected by MapRenderer.from_config
-    from omegaconf import OmegaConf
-    raw = OmegaConf.load(map_cfg_path)
-    cfg = OmegaConf.create({"map": raw})
+    def _get(cfg, key, default=""):
+        try:
+            return cfg[key] if isinstance(cfg, dict) else getattr(cfg, key, default)
+        except Exception:
+            return default
 
-    renderer = MapRenderer.from_config(cfg)
-    router   = OSRMRouter.from_config(cfg)
+    # Env var overrides for paths
+    frodo_root   = Path(os.environ.get("DYNAV_FRODO_ROOT",   _get(path_cfg_raw, "frodo_root",   "/data/frodobots"))).expanduser()
+    dataset_root = Path(os.environ.get("DYNAV_DATASET_ROOT", _get(path_cfg_raw, "dataset_root", str(frodo_root / "dataset")))).expanduser()
+    tile_cache   = Path(os.environ.get("DYNAV_TILE_CACHE",   _get(path_cfg_raw, "tile_cache",   str(dataset_root / "osm_cache")))).expanduser()
+    osm_cache    = Path(os.environ.get("DYNAV_OSM_CACHE",    _get(path_cfg_raw, "osm_cache",    str(dataset_root / "osm_net_cache")))).expanduser()
 
-    builder = FrodoBotsBuilder(
-        frodo_root=args.frodo_root.resolve(),
-        output_dir=args.output.resolve(),
-        renderer=renderer,
-        router=router,
-        threshold_m=float(raw.get("osrm_valid_threshold_m", 10.0)),
+    # Filter params are already set from env vars at module load time.
+    # Just read sample_stride (not a module-level constant).
+    sample_stride = int(os.environ.get("DYNAV_SAMPLE_STRIDE", str(_SAMPLE_STRIDE)))
+
+    train_dir  = dataset_root / "train"
+    val_dir    = dataset_root / "val"
+    gif_dir    = dataset_root / "gifs"
+    frame_base = dataset_root / "frames"
+    for d in [train_dir, val_dir, gif_dir]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    # MapRenderer — resolve map config as a simple dict, then wrap for from_config
+    def _cfg_get(cfg, key, default=None):
+        try:
+            return cfg[key] if isinstance(cfg, dict) else getattr(cfg, key, default)
+        except Exception:
+            return default
+
+    class _MapCfgWrapper:
+        """Minimal duck-typed OmegaConf replacement for MapRenderer.from_config."""
+        def __init__(self, raw, tile_cache_override):
+            self._d = dict(raw) if isinstance(raw, dict) else {
+                k: _cfg_get(raw, k)
+                for k in ["tile_url", "tile_zoom", "render_size", "output_size",
+                          "mode", "route_sigma_px", "crop_ratio"]
+            }
+            self._d["tile_cache"] = tile_cache_override
+
+        def get(self, key, default=None):
+            return self._d.get(key, default)
+
+        def __getattr__(self, key):
+            try:
+                return self._d[key]
+            except KeyError:
+                raise AttributeError(key)
+
+    class _CfgRoot:
+        def __init__(self, map_raw, tile_cache_str):
+            self.map = _MapCfgWrapper(map_raw, tile_cache_str)
+
+    tile_cache.mkdir(parents=True, exist_ok=True)
+    renderer = MapRenderer.from_config(_CfgRoot(map_cfg_raw, str(tile_cache)))
+
+    print(f"FrodoBots root : {frodo_root}")
+    print(f"Dataset output : {dataset_root}")
+    print(f"Filter params  : snap={OSM_SNAP_THRESH}m  net_disp={SEG_MIN_NET_DISP_M}m  "
+          f"speed={SEG_MIN_SPEED_MS}m/s  straight={SEG_MIN_STRAIGHT}  "
+          f"stride={sample_stride}")
+    print()
+
+    # Load all segments
+    all_rides: dict[str, dict] = {}
+    for seg_file in SEG_FILES:
+        path = frodo_root / seg_file
+        if not path.exists():
+            print(f"[skip] {seg_file} not found")
+            continue
+        for ride_id, ride_data in json.loads(path.read_text()).items():
+            if ride_id not in all_rides:
+                all_rides[ride_id] = ride_data
+
+    total_rides = len(all_rides)
+    print(f"총 {total_rides} rides 로드됨\n")
+
+    manifest: dict     = {}
+    total_samples      = 0
+    total_segs         = 0
+    passed_segs        = 0
+    t0                 = time.time()
+
+    for ri, (ride_id, ride_data) in enumerate(all_rides.items()):
+        frame_dir = frame_base / f"ride_{ride_id}"
+        if not frame_dir.exists():
+            continue
+
+        for seg in ride_data.get("segments", []):
+            total_segs += 1
+            result = _process_segment(
+                ride_id=ride_id,
+                seg=seg,
+                frame_dir=frame_dir,
+                train_dir=train_dir,
+                val_dir=val_dir,
+                gif_dir=gif_dir,
+                renderer=renderer,
+                osm_cache_dir=osm_cache,
+                sample_stride=sample_stride,
+            )
+            if result is None:
+                continue
+
+            samples, gif_key, gif_meta = result
+            passed_segs   += 1
+            total_samples += len(samples)
+            manifest[gif_key] = gif_meta
+
+            elapsed = time.time() - t0
+            rate    = total_samples / elapsed if elapsed > 0 else 0
+            print(f"[{passed_segs:04d}] ride={ride_id} seg={seg['seg_idx']:02d} "
+                  f"+{len(samples):3d}샘플  총={total_samples:6d}  "
+                  f"snap={gif_meta['osm_snap_mean_m']:.1f}m  "
+                  f"{rate:.1f}샘플/s  {elapsed/60:.1f}min")
+
+        if (ri + 1) % 100 == 0:
+            eta = (time.time() - t0) / (ri + 1) * (total_rides - ri - 1)
+            print(f"\n--- {ri+1}/{total_rides} rides | "
+                  f"세그먼트 {passed_segs}/{total_segs} 통과 | "
+                  f"샘플 {total_samples} | ETA {eta/60:.0f}min ---\n")
+
+    # Manifest
+    manifest_path = gif_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+
+    elapsed = time.time() - t0
+    print(f"\n=== 완료 ({elapsed/60:.1f}분) ===")
+    print(f"  세그먼트 {passed_segs}/{total_segs} 통과")
+    print(f"  샘플 {total_samples}개 (train+val)")
+    print(f"  GIF {passed_segs}개 → {gif_dir}")
+    print(f"  manifest → {manifest_path}")
+
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Build dynav FrodoBots dataset using OSM pedestrian snap."
     )
-    counts = builder.build()
-    sys.exit(0 if sum(counts.values()) > 0 else 1)
+    p.add_argument(
+        "--map-config", type=Path,
+        default=_REPO / "configs" / "map.yaml",
+        help="Path to map.yaml (default: configs/map.yaml)",
+    )
+    p.add_argument(
+        "--paths-config", type=Path,
+        default=_REPO / "configs" / "paths.yaml",
+        help="Path to paths.yaml (default: configs/paths.yaml)",
+    )
+    return p.parse_args()
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)
     main()

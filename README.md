@@ -38,28 +38,22 @@
 모든 파이프라인(rosbag, FrodoBots, 추론)이 동일한 `MapRenderer`를 사용합니다.
 
 **공통 렌더링 스펙:**
-- zoom=19, render_size=512, output_size=224
+- 타일: CartoDB Voyager nolabels, zoom=19
+- render_size=512, output_size=224, **crop_ratio=0.7** (중앙 70% 크롭 후 업스케일 → 1.43× 줌)
 - heading-up 고정 (로봇 heading이 항상 위를 향함)
-- 로봇 마커: 파란 원 (r=6 px) — heading-up에서 화살표는 불필요
-- 목적지 마커: 초록 원 (r=5 px)
+- 로봇 마커: 파란 원 (r=6 px), 목적지: 초록 원 (r=5 px)
 - 경로: 현재 위치 → 목적지 구간만 빨간 선 (과거 구간 미표시)
 
 **경로 생성:**
 
 | 컨텍스트 | 방법 | 특징 |
 |----------|------|------|
-| rosbag 학습 | GPS 궤적 → OSRM `/match` | 에피소드당 1회 호출 |
-| FrodoBots 학습 | 세그먼트 GPS → OSRM `/match` (radius=50m) | 세그먼트당 1회 호출 |
-| 추론 | 현재+목적지 → OSRM `/route` | 미션 시작 시 1회 호출 후 캐시 |
+| FrodoBots 학습 | `osm_snap.py` — Overpass API + Dijkstra | 오프라인, 보행자 전용 네트워크 |
+| rosbag 학습 | GPS 궤적 → OSRM `/match` | EKF GPS, 에피소드당 1회 |
+| 추론 (ROS) | 현재+목적지 → OSRM `/route` | 미션 시작 시 1회 호출 후 캐시 |
 
-두 경우 모두 OSM 네트워크 위 경로 → 학습/추론 분포 일치.
-
-**두 가지 지도 모드 (`ablation_map_hybrid.yaml`으로 전환):**
-
-| 모드 | Ch R | Ch G | Ch B |
-|------|------|------|------|
-| `"rgb"` (기본) | OSM 타일 R | OSM 타일 G | OSM 타일 B |
-| `"hybrid"` | OSM 그레이스케일 | Gaussian 경로 마스크 | 로봇(amp=1.0) + 목적지(amp=0.5) Gaussian |
+**지도 모드:**  
+`"rgb"` 단일 모드 사용. `"hybrid"` 모드는 구현 완료이나 현 연구에서 미사용 (후속 연구 보류).
 
 ---
 
@@ -111,34 +105,55 @@ python scripts/extract_rosbag.py \
 ### FrodoBots
 
 ```bash
-python scripts/build_frodobots_dataset.py \
-    --frodo-root /path/to/frodobots \
-    --output data/
+# 전체 데이터셋 빌드 (configs/paths.yaml에서 경로 설정)
+python scripts/build_frodobots_dataset.py
+
+# GUI에서 실행 (파라미터 조정 + 로그 + 샘플 리뷰)
+python scripts/dynav_gui.py
+
+# 생성된 샘플 확인
+python scripts/view_samples.py
 ```
 
 내부 동작:
-1. `segment_gps_episode()`로 에피소드 → 클린 세그먼트 분할:
-   - GPS 점프(>5m) 지점에서 분리
-   - 장기 정지 구간 제거 (< 0.3m/s가 5초 이상)
-   - 시작점 복귀(루프) 시 세그먼트 종료
-   - 총 경로 < 10m 세그먼트 폐기
-2. 세그먼트당 OSRM `/match` (radius=50m, 1Hz GPS 대응)
-3. `ride_id % 10 == 0` → val, 나머지 → train
+1. `valid_segments_*.json` 로드 (사전 필터링된 세그먼트)
+2. 세그먼트당 `fetch_ped_network()` → 보행자 네트워크 다운로드 (캐시)
+3. `snap_trajectory()` → 품질 필터 (GPS↔OSM 평균 거리 < 10m)
+4. `snap_trajectory_graph()` → Dijkstra 코너 보정 경로 생성
+5. 샘플마다 `MapRenderer.render()` → map.png
+6. 세그먼트 전체 GIF 생성 + manifest.json
+7. `ride_id % 10 == 0` → val, 나머지 → train
+
+**필터 파라미터 (env var 또는 GUI에서 조정):**
+
+| Env Var | 기본값 | 설명 |
+|---------|--------|------|
+| `DYNAV_OSM_SNAP_THRESH` | 10.0 m | GPS↔OSM 평균 거리 상한 |
+| `DYNAV_NET_DISP` | 10.0 m | 세그먼트 순 변위 하한 |
+| `DYNAV_SPEED` | 0.7 m/s | 평균 속도 하한 |
+| `DYNAV_STRAIGHTNESS` | 0.75 | 순변위/누적거리 하한 |
+| `DYNAV_SAMPLE_STRIDE` | 20 frames | 샘플 간격 (1s @20fps) |
 
 ### 데이터셋 구조
 
 ```
-data/
+dataset/
   train/
-    sample_000000/
+    sample_{ride_id}_{frame_id}/
       obs_0.png        # 전방 카메라, 현재 프레임
       obs_1.png        # 전방 카메라, 0.5초 전
       obs_2.png        # 전방 카메라, 1.0초 전
       obs_3.png        # 후방 카메라, 현재 프레임
-      map.png          # OSM 지도 + 경로 오버레이 (224×224, heading-up)
-      meta.json        # gt_waypoints, route_direction
+      map.png          # OSM 지도 + 경로 오버레이 (224×224, heading-up, crop_ratio=0.7)
+      meta.json        # gt_waypoints, route_direction, osm_snap_mean_m, …
     ...
   val/
+  gifs/
+    ride_{id}_seg_{idx}.gif   # 세그먼트 전체 heading-up 애니메이션
+    manifest.json             # gif → 샘플 목록 + 필터 통계 매핑
+  frames/
+    ride_{id}/
+      {frame_id:06d}.jpg      # 사전 추출된 프레임 (OBS_STRIDE=10 간격)
 ```
 
 ---
@@ -166,9 +181,10 @@ python scripts/train.py --config-name ablation_map_hybrid
 | 파라미터 | 기본값 | 설명 |
 |----------|--------|------|
 | `map.tile_zoom` | 19 | OSM 타일 줌 레벨 |
-| `map.mode` | `"rgb"` | `"hybrid"`으로 변경 시 채널 분리 모드 |
 | `map.render_size` | 512 | 회전 전 캔버스 크기 (px) |
 | `map.output_size` | 224 | 최종 지도 이미지 크기 (px) |
+| `map.crop_ratio` | 0.7 | 회전 후 중앙 크롭 비율 (< 1.0 이면 줌인) |
+| `map.mode` | `"rgb"` | `"hybrid"` 구현됨, 현재 미사용 |
 | `model.token_dim` | 256 | 임베딩 차원 |
 | `model.prediction_horizon` | 5 | 예측 웨이포인트 수 |
 | `decoder.type` | `cross_attention` | `self_attention`으로 변경 시 ViNT 스타일 |
@@ -182,26 +198,30 @@ python scripts/train.py --config-name ablation_map_hybrid
 ```
 dynav/
 ├── configs/
-│   ├── map.yaml                      # 지도/OSRM 공용 설정
+│   ├── map.yaml                      # 지도 공용 설정 (tile, render, crop_ratio)
+│   ├── paths.yaml                    # 환경별 데이터 경로
 │   ├── default.yaml                  # 전체 하이퍼파라미터
-│   ├── ablation_map_hybrid.yaml      # hybrid 모드 ablation
-│   ├── rosbag_topics.yaml            # rosbag 추출 설정
-│   └── record_topics.yaml            # rosbag 녹화 토픽
+│   ├── ablation_*.yaml               # ablation 설정
+│   ├── rosbag_topics.yaml
+│   └── record_topics.yaml
 ├── dynav/
 │   ├── map/                          # 통합 지도 모듈
 │   │   ├── tiles.py                  # TileCache, stitch_tiles
-│   │   ├── routing.py                # OSRMRouter, is_route_valid, find_current_idx
-│   │   ├── segment.py                # segment_gps_episode (FrodoBots)
+│   │   ├── routing.py                # OSRMRouter (추론/rosbag용)
+│   │   ├── osm_snap.py               # Overpass+Dijkstra 오프라인 스냅 (FrodoBots용)
+│   │   ├── segment.py                # segment_gps_episode
 │   │   ├── overlay.py                # 시각화 상수 + rgb/hybrid 드로잉
-│   │   └── renderer.py               # MapRenderer
+│   │   └── renderer.py               # MapRenderer (crop_ratio 지원)
 │   ├── models/ (encoders, decoders, map_nav_model.py)
 │   ├── data/ (dataset.py, transforms.py)
 │   ├── losses/ (navigation_losses.py)
 │   └── utils/ (geometry.py, visualization.py)
 ├── scripts/
 │   ├── train.py
-│   ├── extract_rosbag.py             # rosbag → 학습 샘플
-│   ├── build_frodobots_dataset.py    # FrodoBots → 학습 샘플
+│   ├── extract_rosbag.py             # rosbag → 학습 샘플 (OSRM)
+│   ├── build_frodobots_dataset.py    # FrodoBots → 학습 샘플 (osm_snap)
+│   ├── dynav_gui.py                  # 파이프라인 GUI
+│   ├── view_samples.py               # 샘플 빠른 뷰어
 │   ├── record_bag.py
 │   ├── sanity_check.py
 │   └── visualize_attention.py

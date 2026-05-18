@@ -54,6 +54,10 @@ class MapRenderer:
         output_size:    Final square image size (pixels) fed to MapEncoder.
         mode:           ``"rgb"`` or ``"hybrid"``.
         route_sigma_px: Gaussian σ for the route channel (hybrid mode only).
+        crop_ratio:     Centre-crop fraction applied after rotation before
+                        upscaling to output_size.  1.0 = no zoom; 0.7 crops
+                        the central 70 % then upscales to output_size,
+                        giving a 1.43× zoom effect.
     """
 
     def __init__(
@@ -64,15 +68,19 @@ class MapRenderer:
         output_size: int = 224,
         mode: str = "rgb",
         route_sigma_px: float = ROUTE_SIGMA_PX,
+        crop_ratio: float = 1.0,
     ) -> None:
         if mode not in ("rgb", "hybrid"):
             raise ValueError(f"mode must be 'rgb' or 'hybrid', got {mode!r}")
+        if not (0.0 < crop_ratio <= 1.0):
+            raise ValueError(f"crop_ratio must be in (0, 1], got {crop_ratio}")
         self._cache = cache
         self._zoom = zoom
         self._render_size = render_size
         self._output_size = output_size
         self._mode = mode
         self._route_sigma_px = route_sigma_px
+        self._crop_ratio = crop_ratio
         # Canvas size: padded so any heading rotation never exposes grey border
         self._canvas_px = math.ceil(render_size * math.sqrt(2)) + 2 * TILE_SIZE
 
@@ -100,6 +108,7 @@ class MapRenderer:
             output_size=cfg.map.output_size,
             mode=cfg.map.get("mode", "rgb"),
             route_sigma_px=cfg.map.get("route_sigma_px", ROUTE_SIGMA_PX),
+            crop_ratio=cfg.map.get("crop_ratio", 1.0),
         )
 
     # ------------------------------------------------------------------
@@ -260,13 +269,15 @@ class MapRenderer:
             fillcolor=(200, 200, 200),
         )
 
-        # Crop output_size × output_size around the robot centre
-        half = self._output_size // 2
+        # Crop crop_px × crop_px around the robot centre, then scale to output_size.
+        # crop_ratio < 1.0 gives a zoom-in effect (e.g. 0.7 → 1.43× magnification).
+        crop_px = max(1, int(self._output_size * self._crop_ratio))
+        half = crop_px // 2
         cx, cy = int(round(robot_px[0])), int(round(robot_px[1]))
         left   = cx - half
         top    = cy - half
-        right  = left + self._output_size
-        bottom = top  + self._output_size
+        right  = left + crop_px
+        bottom = top  + crop_px
 
         # Safety pad if crop extends outside canvas (shouldn't happen with
         # the canvas_px formula, but guards against edge cases)

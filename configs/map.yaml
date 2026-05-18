@@ -9,11 +9,12 @@
 # ---------------------------------------------------------------------------
 
 # CartoDB Positron (no labels) — clean base map, no text leaking semantic info.
-tile_url: "https://cartodb-basemaps-a.global.ssl.fastly.net/light_nolabels/{z}/{x}/{y}.png"
+tile_url: "https://basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}.png"
 # Alternatives:
+#   tile_url: "https://cartodb-basemaps-a.global.ssl.fastly.net/light_nolabels/{z}/{x}/{y}.png"  # grey
 #   tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png"   # standard OSM (has labels)
 
-# Local disk cache for downloaded tiles.  Shared across all runs on the same machine.
+# Local disk cache for downloaded tiles.  Override in paths.yaml per environment.
 tile_cache: "/tmp/dynav_tile_cache"
 
 # OSM zoom level. 19 is the maximum standard level (~0.3 m/px near the equator).
@@ -64,3 +65,12 @@ osrm_valid_threshold_m: 10.0
 # Gaussian σ for the route soft mask channel (G).
 # At zoom 19, 1 m ≈ 3 px, so σ=8 px ≈ 2.7 m — absorbs typical GPS error.
 route_sigma_px: 8.0
+
+# ---------------------------------------------------------------------------
+# Zoom
+# ---------------------------------------------------------------------------
+
+# Centre-crop fraction applied after heading-up rotation, before upscaling to
+# output_size.  1.0 = no extra zoom; 0.7 crops the central 70 % then upscales,
+# giving 1/0.7 ≈ 1.43× magnification at the same pixel budget.
+crop_ratio: 0.7
