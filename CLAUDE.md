@@ -153,9 +153,11 @@ dynav/
 │   ├── visualize_attention.py
 │   ├── record_bag.py
 │   ├── extract_rosbag.py                 # rosbag → training samples (OSRM)
-│   ├── build_frodobots_dataset.py        # FrodoBots → dataset (osm_snap, GIF+manifest)
-│   ├── dynav_gui.py                      # 파이프라인 GUI (NEW)
-│   └── view_samples.py                   # 샘플 빠른 뷰어 (NEW)
+│   ├── extract_frodobots_segments.py     # Step 1: raw rides → valid_segments_{group}.json
+│   ├── extract_frodobots_frames.py       # Step 2: valid_segments → stride-10 JPEGs
+│   ├── build_frodobots_dataset.py        # Step 3: segments+frames → samples+GIFs
+│   ├── dynav_gui.py                      # 파이프라인 GUI (3단계 통합)
+│   └── view_samples.py                   # 샘플 빠른 뷰어
 └── tests/
     ├── test_map.py
     ├── test_encoders.py
@@ -201,23 +203,44 @@ route_dir = compute_route_direction(
 )  # returns radians in body frame
 ```
 
-### FrodoBots dataset building (osm_snap)
+### FrodoBots 데이터셋 빌드 파이프라인 (3단계)
+
+**Step 1 — 세그먼트 추출** (`extract_frodobots_segments.py`):
 ```
-valid_segments_*.json → fetch_ped_network() (Overpass, 캐시)
-→ snap_trajectory() (품질 필터: mean snap < 10m)
+output_rides_*/{gps,camera_timestamps}.csv
+→ stride-10 프레임 GPS 보간 + smoothed speed
+→ 정지 감지 (speed < 0.4 m/s, 3초 지속) / GPS 갭 (>5s) 으로 분할
+→ valid_segments_{group}.json
+   { ride_id: { segments: [{seg_idx, frame_ids, frame_lat/lon, n_frames,
+                             net_disp_m, avg_speed_ms, straightness}] } }
+```
+파라미터 env var: `DYNAV_SEG_STOP_SPEED` `DYNAV_SEG_STOP_WINDOW` `DYNAV_SEG_GPS_GAP` `DYNAV_SEG_MIN_FRAMES`  
+incremental: 이미 처리된 ride는 skip.
+
+**Step 2 — 프레임 추출** (`extract_frodobots_frames.py`):
+```
+valid_segments_{group}.json + output_rides_*/recordings/*.m3u8
+→ ffmpeg로 stride-10 프레임 추출
+→ dataset/frames/ride_{id}/{frame_id:06d}.jpg
+```
+segment frame_ids에 필요한 프레임 + obs lookback(×3)만 보존, 나머지 삭제.  
+이미 필요한 프레임이 모두 있으면 skip. `DYNAV_FRAME_QUALITY` `DYNAV_FRAME_FORCE`
+
+**Step 3 — 데이터셋 빌드** (`build_frodobots_dataset.py`):
+```
+valid_segments_*.json + dataset/frames/
+→ quality pre-filter (net_disp, speed, straightness)
+→ fetch_ped_network() (Overpass, 캐시) + snap_trajectory() (OSM snap < 10m)
 → snap_trajectory_graph() (Dijkstra 코너 보정)
 → MapRenderer.render() → map.png
-→ GIF (세그먼트 전체 프레임) + manifest.json
+→ obs_0..3.png (stride-10 × 3 lookback)
+→ GIF + manifest.json
 ```
-필터 파라미터는 env var으로 오버라이드 (GUI에서 사용):
-`DYNAV_OSM_SNAP_THRESH` `DYNAV_NET_DISP` `DYNAV_SPEED` `DYNAV_STRAIGHTNESS` `DYNAV_SAMPLE_STRIDE`
+필터 파라미터 env var: `DYNAV_OSM_SNAP_THRESH` `DYNAV_NET_DISP` `DYNAV_SPEED` `DYNAV_STRAIGHTNESS` `DYNAV_SAMPLE_STRIDE`
 
 **현재 생성된 데이터셋 (2026-05-18):**  
-train 28,081개 + val 3,421개 = 31,502개 샘플  
-GIF 823개, `dataset/gifs/manifest.json` 존재
-
-### FrodoBots segment filtering
-`segment_gps_episode()` pipeline: GPS jump split → stationary removal → loop detection → min-length filter (10m).
+train 28,081개 + val 3,421개 = 31,502개 샘플 (rides0, rides2 기반)  
+rides22, rides23 신규 데이터 추가 예정.
 
 ---
 
