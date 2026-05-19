@@ -79,6 +79,7 @@ def _train_one_epoch(
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    use_amp: bool = False,
 ) -> dict[str, float]:
     """Run one training epoch.
 
@@ -95,8 +96,9 @@ def _train_one_epoch(
         gt   = batch["gt_waypoints"].to(device)    # (B, H, 2)
         rdir = batch["route_direction"].to(device)  # (B,)
 
-        out = model(obs, mp)
-        total, loss_dict = criterion(out["waypoints"], gt, rdir)
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
+            out = model(obs, mp)
+            total, loss_dict = criterion(out["waypoints"], gt, rdir)
 
         optimizer.zero_grad()
         total.backward()
@@ -116,6 +118,7 @@ def _eval_one_epoch(
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    use_amp: bool = False,
 ) -> float:
     """Run one validation epoch and return mean total loss."""
     model.eval()
@@ -125,8 +128,9 @@ def _eval_one_epoch(
         mp   = batch["map_image"].to(device)
         gt   = batch["gt_waypoints"].to(device)
         rdir = batch["route_direction"].to(device)
-        out  = model(obs, mp)
-        loss, _ = criterion(out["waypoints"], gt, rdir)
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
+            out  = model(obs, mp)
+            loss, _ = criterion(out["waypoints"], gt, rdir)
         total_loss += loss.item()
     return total_loss / max(len(loader), 1)
 
@@ -196,6 +200,11 @@ def main(cfg: DictConfig) -> None:
             config=OmegaConf.to_container(cfg, resolve=True),
         )
 
+    # ── AMP ────────────────────────────────────────────────────────────────────
+    use_amp = cfg.training.get("amp", False) and device.type == "cuda"
+    if use_amp:
+        log.info("AMP enabled: BF16 autocast")
+
     # ── Output dir (Hydra sets cwd to outputs/<date>/<time>/) ──────────────────
     ckpt_dir = Path("checkpoints")
     ckpt_dir.mkdir(exist_ok=True)
@@ -211,8 +220,8 @@ def main(cfg: DictConfig) -> None:
             model.unfreeze_encoders()
             log.info(f"Epoch {epoch}: encoder backbone unfrozen")
 
-        train_losses = _train_one_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss     = _eval_one_epoch(model, val_loader, criterion, device)
+        train_losses = _train_one_epoch(model, train_loader, criterion, optimizer, device, use_amp)
+        val_loss     = _eval_one_epoch(model, val_loader, criterion, device, use_amp)
 
         scheduler.step()
         current_lr = optimizer.param_groups[0]["lr"]

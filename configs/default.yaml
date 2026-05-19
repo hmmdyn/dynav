@@ -38,6 +38,7 @@ training:
   save_every: 10                    # save checkpoint every N epochs
   num_workers: 4                    # DataLoader worker processes
   use_wandb: false                  # enable wandb logging
+  amp: false                        # BF16 autocast (recommended for CUDA, no GradScaler needed)
 
 data:
   data_dir: "data"                  # root directory for real datasets
