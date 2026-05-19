@@ -3,7 +3,7 @@
 dynav_gui.py — FrodoBots 데이터 파이프라인 GUI
 
 Tab 1: 세그먼트 리뷰  — GIF 확인 후 Keep/Reject, 완료 시 Reject 데이터 삭제
-Tab 2: 파이프라인     — 필터 파라미터 설정 + 빌드 실행 + 로그
+Tab 2: 파이프라인     — Step1 세그먼트 추출 / Step2 프레임 추출 / Step3 빌드
 Tab 3: 샘플 뷰어      — 생성된 샘플 빠른 확인 (GIF + map + obs_0)
 
 경로 설정: configs/paths.yaml 또는 환경 변수(DYNAV_FRODO_ROOT, DYNAV_DATASET_ROOT)
@@ -43,7 +43,9 @@ GIF_DIR     = DATASET_DIR / "gifs"
 TRAIN_DIR   = DATASET_DIR / "train"
 VAL_DIR     = DATASET_DIR / "val"
 MANIFEST    = GIF_DIR / "manifest.json"
-BUILD_SCRIPT = _REPO / "scripts" / "build_frodobots_dataset.py"
+BUILD_SCRIPT  = _REPO / "scripts" / "build_frodobots_dataset.py"
+SEG_SCRIPT    = _REPO / "scripts" / "extract_frodobots_segments.py"
+FRAMES_SCRIPT = _REPO / "scripts" / "extract_frodobots_frames.py"
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -367,14 +369,25 @@ class ReviewTab(ttk.Frame):
 # ── Tab 2: Pipeline ────────────────────────────────────────────────────────────
 
 class PipelineTab(ttk.Frame):
+    """
+    3단계 파이프라인 (각 단계 독립 실행 가능):
+      Step 1: 세그먼트 추출 (extract_frodobots_segments.py)
+      Step 2: 프레임 추출  (extract_frodobots_frames.py)
+      Step 3: 데이터셋 빌드 (build_frodobots_dataset.py)
+    """
+
     def __init__(self, parent, on_build_done=None):
         super().__init__(parent)
         self._on_build_done = on_build_done
-        self._proc = None
+        self._proc           = None
+        self._params_seg     = {}
+        self._params_build   = {}
         self._build_ui()
 
+    # ── UI construction ──────────────────────────────────────────────────
+
     def _build_ui(self):
-        # Path display
+        # path display
         path_frame = ttk.LabelFrame(self, text="데이터 경로 (configs/paths.yaml)")
         path_frame.pack(fill=tk.X, padx=10, pady=(8, 0))
         ttk.Label(path_frame, text=f"FrodoBots root : {FROB_DIR}", anchor="w").pack(
@@ -382,12 +395,54 @@ class PipelineTab(ttk.Frame):
         ttk.Label(path_frame, text=f"Dataset output : {DATASET_DIR}", anchor="w").pack(
             anchor="w", padx=8, pady=2)
 
-        # Filter params
-        pf = ttk.LabelFrame(self, text="필터링 파라미터")
-        pf.pack(fill=tk.X, padx=10, pady=8)
+        # ── Step 1: 세그먼트 추출 ──
+        sf = ttk.LabelFrame(self, text="Step 1 — 세그먼트 추출 (extract_frodobots_segments.py)")
+        sf.pack(fill=tk.X, padx=10, pady=(8, 4))
 
-        self._params = {}
-        defs = [
+        seg_defs = [
+            ("정지 속도 임계값 (m/s)", "DYNAV_SEG_STOP_SPEED",  "0.4",
+             "이 속도 이하가 지속되면 정지로 판단"),
+            ("정지 지속 시간 (s)",     "DYNAV_SEG_STOP_WINDOW", "3.0",
+             "최소 정지 지속 시간 → 세그먼트 경계"),
+            ("GPS 갭 임계값 (s)",      "DYNAV_SEG_GPS_GAP",     "5.0",
+             "GPS 타임스탬프 갭 → 강제 분할"),
+            ("최소 세그먼트 길이",     "DYNAV_SEG_MIN_FRAMES",  "50",
+             "stride-10 프레임 기준 최소 세그먼트 크기"),
+        ]
+        self._build_param_grid(sf, seg_defs, self._params_seg)
+        seg_btn_row = ttk.Frame(sf)
+        seg_btn_row.grid(row=len(seg_defs), column=0, columnspan=3,
+                         sticky="w", padx=10, pady=6)
+        self._seg_btn = ttk.Button(seg_btn_row, text="▶  세그먼트 추출 실행",
+                                   command=self._run_seg)
+        self._seg_btn.pack(side=tk.LEFT, padx=4)
+
+        # ── Step 2: 프레임 추출 ──
+        ff = ttk.LabelFrame(self, text="Step 2 — 프레임 추출 (extract_frodobots_frames.py)")
+        ff.pack(fill=tk.X, padx=10, pady=4)
+
+        frame_inner = ttk.Frame(ff)
+        frame_inner.pack(fill=tk.X, padx=10, pady=6)
+        ttk.Label(frame_inner, text="JPEG 품질 (2=최고~31):", anchor="e").grid(
+            row=0, column=0, sticky="e", padx=(0, 4), pady=4)
+        self._frame_quality = tk.StringVar(value="3")
+        ttk.Entry(frame_inner, textvariable=self._frame_quality, width=5).grid(
+            row=0, column=1, sticky="w")
+        ttk.Label(frame_inner, text="낮을수록 파일 크기 증가",
+                  foreground="#555", font=("Arial", 9)).grid(
+            row=0, column=2, sticky="w", padx=(8, 0))
+
+        frame_btn_row = ttk.Frame(ff)
+        frame_btn_row.pack(fill=tk.X, padx=10, pady=(0, 6))
+        self._frame_btn = ttk.Button(frame_btn_row, text="▶  프레임 추출 실행",
+                                     command=self._run_frames)
+        self._frame_btn.pack(side=tk.LEFT, padx=4)
+
+        # ── Step 3: 데이터셋 빌드 ──
+        bf = ttk.LabelFrame(self, text="Step 3 — 데이터셋 빌드 (build_frodobots_dataset.py)")
+        bf.pack(fill=tk.X, padx=10, pady=4)
+
+        build_defs = [
             ("OSM Snap 임계값 (m)",  "DYNAV_OSM_SNAP_THRESH", "10.0",
              "GPS → OSM 보행자 도로 평균 거리 허용 상한"),
             ("최소 순변위 (m)",       "DYNAV_NET_DISP",         "10.0",
@@ -399,86 +454,118 @@ class PipelineTab(ttk.Frame):
             ("샘플 stride (frames)", "DYNAV_SAMPLE_STRIDE",    "20",
              "세그먼트 내 샘플 간격 (20 = 1 s @ 20 fps)"),
         ]
-        for r, (label, env_key, default, tip) in enumerate(defs):
-            ttk.Label(pf, text=label + ":", anchor="e").grid(
-                row=r, column=0, sticky="e", padx=(10, 4), pady=4)
-            var = tk.StringVar(value=default)
-            ttk.Entry(pf, textvariable=var, width=8).grid(
-                row=r, column=1, sticky="w", padx=4)
-            ttk.Label(pf, text=tip, foreground="#555", font=("Arial", 9)).grid(
-                row=r, column=2, sticky="w", padx=(6, 10))
-            self._params[env_key] = var
+        self._build_param_grid(bf, build_defs, self._params_build)
+        build_btn_row = ttk.Frame(bf)
+        build_btn_row.grid(row=len(build_defs), column=0, columnspan=3,
+                           sticky="w", padx=10, pady=6)
+        self._build_btn = ttk.Button(build_btn_row, text="▶  데이터셋 빌드 실행",
+                                     command=self._run_build)
+        self._build_btn.pack(side=tk.LEFT, padx=4)
+        ttk.Button(build_btn_row, text="🗑  샘플·GIF 초기화",
+                   command=self._clear_dataset).pack(side=tk.LEFT, padx=8)
 
-        btn_row = ttk.Frame(self)
-        btn_row.pack(fill=tk.X, padx=10, pady=4)
-
-        self._run_btn = ttk.Button(btn_row, text="▶  전체 데이터셋 빌드",
-                                   command=self._run)
-        self._run_btn.pack(side=tk.LEFT, padx=4)
-
-        self._stop_btn = ttk.Button(btn_row, text="■  중단",
+        # ── 공통 진행바 + 중단 ──
+        ctrl_row = ttk.Frame(self)
+        ctrl_row.pack(fill=tk.X, padx=10, pady=2)
+        self._stop_btn = ttk.Button(ctrl_row, text="■  중단",
                                     command=self._stop, state=tk.DISABLED)
         self._stop_btn.pack(side=tk.LEFT, padx=4)
+        self._pbar = ttk.Progressbar(ctrl_row, mode="indeterminate", length=400)
+        self._pbar.pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
 
-        ttk.Button(btn_row, text="🗑  기존 샘플·GIF 초기화",
-                   command=self._clear_dataset).pack(side=tk.LEFT, padx=4)
-
-        self._pbar = ttk.Progressbar(self, mode="indeterminate", length=300)
-        self._pbar.pack(fill=tk.X, padx=10, pady=2)
-
-        lf = ttk.LabelFrame(self, text="빌드 로그")
+        # ── 공유 로그 ──
+        lf = ttk.LabelFrame(self, text="로그")
         lf.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
         self._log = scrolledtext.ScrolledText(
-            lf, height=16, font=("Courier", 9), state=tk.DISABLED)
+            lf, height=10, font=("Courier", 9), state=tk.DISABLED)
         self._log.pack(fill=tk.BOTH, expand=True)
 
-    def _run(self):
-        env = os.environ.copy()
-        for key, var in self._params.items():
-            env[key] = var.get()
+    def _build_param_grid(self, parent, defs, store):
+        for r, (label, env_key, default, tip) in enumerate(defs):
+            ttk.Label(parent, text=label + ":", anchor="e").grid(
+                row=r, column=0, sticky="e", padx=(10, 4), pady=3)
+            var = tk.StringVar(value=default)
+            ttk.Entry(parent, textvariable=var, width=8).grid(
+                row=r, column=1, sticky="w", padx=4)
+            ttk.Label(parent, text=tip, foreground="#555",
+                      font=("Arial", 9)).grid(
+                row=r, column=2, sticky="w", padx=(6, 10))
+            store[env_key] = var
 
+    # ── step runners ─────────────────────────────────────────────────────
+
+    def _run_seg(self):
+        env = os.environ.copy()
+        for k, v in self._params_seg.items():
+            env[k] = v.get()
+        self._log_clear()
+        self._log_append("=== Step 1: 세그먼트 추출 ===\n")
+        self._run_script(SEG_SCRIPT, env, label="세그먼트 추출")
+
+    def _run_frames(self):
+        env = os.environ.copy()
+        env["DYNAV_FRAME_QUALITY"] = self._frame_quality.get()
+        self._log_clear()
+        self._log_append("=== Step 2: 프레임 추출 ===\n")
+        self._run_script(FRAMES_SCRIPT, env, label="프레임 추출")
+
+    def _run_build(self):
+        env = os.environ.copy()
+        for k, v in self._params_build.items():
+            env[k] = v.get()
         self._log_clear()
         self._log_append(
-            "빌드 시작\n" +
-            "\n".join(f"  {k}={v.get()}" for k, v in self._params.items()) + "\n\n")
+            "=== Step 3: 데이터셋 빌드 ===\n" +
+            "\n".join(f"  {k}={v.get()}" for k, v in self._params_build.items()) + "\n\n")
+        self._run_script(BUILD_SCRIPT, env, label="빌드",
+                         on_done=self._on_build_done)
 
-        self._run_btn.config(state=tk.DISABLED)
-        self._stop_btn.config(state=tk.NORMAL)
+    def _run_script(self, script, env, label="작업", on_done=None):
+        self._set_running(True)
         self._pbar.start(12)
 
         def _worker():
             self._proc = subprocess.Popen(
-                [sys.executable, str(BUILD_SCRIPT)],
+                [sys.executable, str(script)],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1, env=env,
             )
             for line in self._proc.stdout:
                 self.after(0, self._log_append, line)
             self._proc.wait()
-            rc = self._proc.returncode
-            self.after(0, self._build_finished, rc)
+            self.after(0, self._step_finished, self._proc.returncode, label, on_done)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    # ── state helpers ────────────────────────────────────────────────────
+
+    def _set_running(self, running: bool):
+        s_run  = tk.DISABLED if running else tk.NORMAL
+        s_stop = tk.NORMAL   if running else tk.DISABLED
+        for btn in (self._seg_btn, self._frame_btn, self._build_btn):
+            btn.config(state=s_run)
+        self._stop_btn.config(state=s_stop)
 
     def _stop(self):
         if self._proc and self._proc.poll() is None:
             self._proc.terminate()
-            self._log_append("\n⚠ 빌드 중단됨\n")
-        self._build_finished(-1)
+            self._log_append("\n⚠ 중단됨\n")
+        self._step_finished(-1, "", None)
 
-    def _build_finished(self, rc):
+    def _step_finished(self, rc, label, on_done):
         self._pbar.stop()
-        self._run_btn.config(state=tk.NORMAL)
-        self._stop_btn.config(state=tk.DISABLED)
+        self._set_running(False)
         if rc == 0:
-            self._log_append("\n✓ 빌드 완료!\n")
-            if self._on_build_done:
-                self._on_build_done()
+            self._log_append(f"\n✓ {label} 완료!\n")
+            if on_done:
+                on_done()
         elif rc != -1:
-            self._log_append(f"\n✗ 오류 발생 (returncode={rc})\n")
+            self._log_append(f"\n✗ {label} 오류 (returncode={rc})\n")
+
+    # ── dataset clear ────────────────────────────────────────────────────
 
     def _clear_dataset(self):
-        msg = ("train/, val/ 샘플과 gifs/ 폴더를 모두 삭제합니다.\n계속하시겠습니까?")
+        msg = "train/, val/ 샘플과 gifs/ 폴더를 모두 삭제합니다.\n계속하시겠습니까?"
         if not messagebox.askyesno("초기화 확인", msg, icon="warning"):
             return
         self._log_append("초기화 중...\n")
@@ -491,6 +578,8 @@ class PipelineTab(ttk.Frame):
             self.after(0, self._log_append, "초기화 완료\n")
 
         threading.Thread(target=_do, daemon=True).start()
+
+    # ── log helpers ──────────────────────────────────────────────────────
 
     def _log_append(self, text):
         self._log.config(state=tk.NORMAL)
