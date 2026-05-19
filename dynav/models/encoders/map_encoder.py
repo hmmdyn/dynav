@@ -1,8 +1,10 @@
 """Map encoder for OSM-rendered top-down map+path images.
 
-Encodes a single map image via EfficientNet-B0 features (no GAP) to preserve
-spatial layout, then downsamples to a 3×3 grid via AdaptiveAvgPool2d, projects
-to 9 tokens, and adds a 2D positional encoding (learnable or sinusoidal).
+Encodes a single map image via EfficientNet-B0 features, then collapses
+to a single global token via GlobalAvgPool (AdaptiveAvgPool2d(1,1)).
+Single-token GAP is more robust to GPS, heading, and path centerline offset
+errors than spatial grids, since all real-world noise sources cause primarily
+horizontal displacement in heading-up rendered maps.
 """
 
 import torch
@@ -11,152 +13,72 @@ from einops import rearrange
 from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
 
 
-def _build_2d_sinusoidal_encoding(grid_size: int, dim: int) -> torch.Tensor:
-    """Build 2D sinusoidal positional encoding for a grid_size × grid_size grid.
-
-    Splits dim into two halves: first half encodes row position,
-    second half encodes column position, using sinusoidal functions
-    at geometrically spaced frequencies (following ViT/Transformer conventions).
-
-    Args:
-        grid_size: Spatial grid side length (3 after adaptive pooling).
-        dim: Token embedding dimension. Must be divisible by 4
-            (sin+cos for each of 2 axes).
-
-    Returns:
-        Positional encoding tensor of shape (grid_size * grid_size, dim).
-    """
-    assert dim % 4 == 0, f"dim must be divisible by 4, got {dim}"
-    half_dim = dim // 2
-    quarter_dim = dim // 4
-
-    # Frequency bands (same as standard sinusoidal PE)
-    omega = 1.0 / (10000.0 ** (torch.arange(quarter_dim).float() / quarter_dim))
-
-    # Row and column indices
-    rows = torch.arange(grid_size).float().unsqueeze(1)  # (G, 1)
-    cols = torch.arange(grid_size).float().unsqueeze(1)  # (G, 1)
-
-    # Sinusoidal encoding for rows: (G, quarter_dim) sin + (G, quarter_dim) cos
-    row_enc = torch.cat([
-        torch.sin(rows * omega.unsqueeze(0)),  # (G, quarter_dim)
-        torch.cos(rows * omega.unsqueeze(0)),  # (G, quarter_dim)
-    ], dim=-1)  # (G, half_dim)
-
-    # Same for columns
-    col_enc = torch.cat([
-        torch.sin(cols * omega.unsqueeze(0)),
-        torch.cos(cols * omega.unsqueeze(0)),
-    ], dim=-1)  # (G, half_dim)
-
-    # Combine: for each (row, col) pair, concat row_enc and col_enc
-    # Result shape: (G*G, dim)
-    pos_enc = torch.cat([
-        row_enc.unsqueeze(1).expand(-1, grid_size, -1).reshape(-1, half_dim),
-        col_enc.unsqueeze(0).expand(grid_size, -1, -1).reshape(-1, half_dim),
-    ], dim=-1)  # (G*G, dim)
-
-    return pos_enc
-
-
 class MapEncoder(nn.Module):
-    """Encodes a map+path image into a sequence of spatial token embeddings.
+    """Encodes a map+path image into a single global token embedding.
 
-    EfficientNet-B0 features (B, 1280, 7, 7) are downsampled to (B, 1280, 3, 3)
-    via AdaptiveAvgPool2d, giving 9 tokens that capture coarse spatial structure
-    (left / center / right route direction) while keeping the token count low
-    relative to the 4 observation tokens. Each of the 9 spatial locations is
-    projected to token_dim and receives a 2D positional encoding.
+    EfficientNet-B0 features (B, 1280, 7, 7) are collapsed to a single
+    1280-d vector via GlobalAvgPool, then projected to token_dim.
+    No positional encoding is used (single token has no spatial position).
+
+    This design is robust to the dominant noise sources in real navigation:
+    GPS position error, IMU/compass heading error, and path centerline offset
+    all cause horizontal displacement in heading-up map images —
+    GlobalAvgPool is invariant to such shifts.
 
     Args:
-        token_dim: Dimension of output token embeddings (d).
+        token_dim: Dimension of output token embedding (d).
         pretrained: Whether to load ImageNet pretrained EfficientNet-B0 weights.
-        pos_enc_type: ``"learnable"`` (default) uses a trainable
-            ``nn.Parameter``; ``"sinusoidal"`` uses a fixed 2D sinusoidal
-            encoding registered as a buffer.
 
     Example:
         >>> enc = MapEncoder(token_dim=256)
         >>> x = torch.randn(2, 3, 224, 224)
-        >>> tokens = enc(x)   # (2, 9, 256)
+        >>> tokens = enc(x)   # (2, 1, 256)
     """
 
-    # EfficientNet-B0 spatial output: (B, 1280, 7, 7) → pooled to (B, 1280, 3, 3)
     _EFFICIENTNET_FEAT_DIM: int = 1280
-    _SPATIAL_GRID: int = 3          # 3 × 3 = 9 tokens
 
     def __init__(
         self,
         token_dim: int = 256,
         pretrained: bool = True,
-        pos_enc_type: str = "learnable",
     ) -> None:
         super().__init__()
 
         self.token_dim = token_dim
-        self.n_tokens = self._SPATIAL_GRID ** 2  # 9
+        self.n_tokens = 1
 
         # ── Backbone (features only — no avgpool, no classifier) ───────────────
         weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = efficientnet_b0(weights=weights)
         self.features = backbone.features   # output: (B, 1280, 7, 7)
 
-        # ── Adaptive spatial pooling: 7×7 → 3×3 ──────────────────────────────
-        self.spatial_pool = nn.AdaptiveAvgPool2d((3, 3))
+        # ── Global average pooling: 7×7 → 1×1 ────────────────────────────────
+        self.gap = nn.AdaptiveAvgPool2d((1, 1))
 
         # ── Projection head ───────────────────────────────────────────────────
         self.proj = nn.Linear(self._EFFICIENTNET_FEAT_DIM, token_dim)
 
-        # ── 2D positional encoding ─────────────────────────────────────────────
-        if pos_enc_type == "learnable":
-            # Trainable parameter — shape (1, 9, token_dim)
-            # Initialized small so early training is not dominated by pos enc
-            self.pos_enc_2d = nn.Parameter(
-                torch.randn(1, self.n_tokens, token_dim) * 0.02
-            )
-        elif pos_enc_type == "sinusoidal":
-            # Fixed buffer — shape (1, 9, token_dim)
-            enc = _build_2d_sinusoidal_encoding(self._SPATIAL_GRID, token_dim)
-            self.register_buffer("pos_enc_2d", enc.unsqueeze(0))  # (1, 9, d)
-        else:
-            raise ValueError(
-                f"Unknown pos_enc_type '{pos_enc_type}'. "
-                "Expected 'learnable' or 'sinusoidal'."
-            )
-
     # ── Forward ───────────────────────────────────────────────────────────────
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode a batch of map images into spatial token sequences.
+        """Encode a batch of map images into a single global token.
 
         Args:
             x: Map+path images of shape (B, 3, H, W).
 
         Returns:
-            Spatial token embeddings of shape (B, 9, token_dim).
+            Global token embedding of shape (B, 1, token_dim).
         """
-        # x: (B, 3, H, W)
         feat = self.features(x)                             # (B, 1280, 7, 7)
-        feat = self.spatial_pool(feat)                      # (B, 1280, 3, 3)
-
-        # Flatten spatial dims → token sequence
-        tokens = rearrange(feat, "b c h w -> b (h w) c")   # (B, 9, 1280)
-
-        tokens = self.proj(tokens)                          # (B, 9, token_dim)
-
-        # Add 2D positional encoding
-        tokens = tokens + self.pos_enc_2d                   # (B, 9, token_dim)
-
+        feat = self.gap(feat)                               # (B, 1280, 1, 1)
+        feat = rearrange(feat, "b c 1 1 -> b 1 c")         # (B, 1, 1280)
+        tokens = self.proj(feat)                            # (B, 1, token_dim)
         return tokens
 
     # ── Freeze / unfreeze backbone ────────────────────────────────────────────
 
     def freeze_backbone(self) -> None:
-        """Freeze EfficientNet-B0 feature extractor weights.
-
-        Projection head and positional encoding remain trainable.
-        Useful for the initial warm-up phase (see encoder.freeze_epochs in config).
-        """
+        """Freeze EfficientNet-B0 feature extractor weights."""
         for param in self.features.parameters():
             param.requires_grad = False
 

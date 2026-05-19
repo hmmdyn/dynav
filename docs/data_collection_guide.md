@@ -31,13 +31,6 @@ Jackal J100 주행 → rosbag 녹화 (record_bag.py)
 - 카메라: Insta360 X2/X3 (`insta360_ros_driver`)
 - 로봇: Clearpath Jackal J100 (`j100_0519`)
 
-파이프라인 검증만 필요한 경우 실제 데이터 없이 `DummyDyNavDataset`을 사용할 수 있습니다:
-
-```bash
-python scripts/sanity_check.py
-python scripts/train.py training.dummy=true
-```
-
 ---
 
 ## 2. 환경 요구사항
@@ -339,18 +332,7 @@ data/
 
 ## 6. 데이터 품질 검증
 
-### 6.1 파이프라인 검증
-
-실제 데이터 없이 학습 파이프라인이 올바르게 동작하는지 먼저 확인합니다.
-
-```bash
-python scripts/sanity_check.py
-# 정상: 100 iter 후 waypoint_loss < 0.05, exit code 0
-
-python scripts/train.py training.dummy=true training.dummy_size=50
-```
-
-### 6.2 데이터셋 로딩 테스트
+### 6.1 데이터셋 로딩 테스트
 
 ```python
 from dynav.data.dataset import DyNavDataset

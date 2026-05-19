@@ -2,13 +2,10 @@
 
 Usage:
     # Dummy data overfitting test (no real dataset needed)
-    python scripts/train.py training.dummy=true training.epochs=20
-
-    # Real data training
     python scripts/train.py data.data_dir=/path/to/data
 
     # Override decoder type for ablation
-    python scripts/train.py decoder.type=self_attention
+    python scripts/train.py decoder.type=cross_attention
 
 Hydra writes outputs (logs, checkpoints) to outputs/<date>/<time>/.
 """
@@ -149,30 +146,12 @@ def main(cfg: DictConfig) -> None:
     log.info(f"Device: {device}")
 
     # ── Datasets ───────────────────────────────────────────────────────────────
-    from dynav.data.dataset import DummyDyNavDataset, DyNavDataset
+    from dynav.data.dataset import DyNavDataset
+    from hydra.utils import get_original_cwd
 
-    n_obs = cfg.model.obs_context_length + 2
-
-    if cfg.training.dummy:
-        log.info("Using DummyDyNavDataset (dummy=true)")
-        train_ds = DummyDyNavDataset(
-            size=cfg.training.dummy_size,
-            n_obs=n_obs,
-            image_size=cfg.data.image_size,
-            horizon=cfg.model.prediction_horizon,
-        )
-        val_ds = DummyDyNavDataset(
-            size=max(cfg.training.dummy_size // 5, 16),
-            n_obs=n_obs,
-            image_size=cfg.data.image_size,
-            horizon=cfg.model.prediction_horizon,
-            seed=99,
-        )
-    else:
-        from hydra.utils import get_original_cwd
-        data_dir = Path(get_original_cwd()) / cfg.data.data_dir
-        train_ds = DyNavDataset(data_dir, split="train", image_size=cfg.data.image_size)
-        val_ds   = DyNavDataset(data_dir, split="val",   image_size=cfg.data.image_size)
+    data_dir = Path(get_original_cwd()) / cfg.data.data_dir
+    train_ds = DyNavDataset(data_dir, split="train", image_size=cfg.data.image_size)
+    val_ds   = DyNavDataset(data_dir, split="val",   image_size=cfg.data.image_size)
 
     num_workers = cfg.training.num_workers
     train_loader = DataLoader(

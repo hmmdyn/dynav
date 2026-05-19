@@ -10,25 +10,25 @@
 ## 모델 구조
 
 ```
-관측 이미지 (4장)          지도+경로 이미지 (1장)
-전방 현재/과거 2장 + 후방    OSM 타일 + 경로 오버레이 (heading-up)
-        │                          │
-  VisualEncoder              MapEncoder
-  EfficientNet-B0            EfficientNet-B0
-  GAP → Linear(1280, 256)    3×3 adaptive pool → Linear(1280, 256)
-  (B, 4, 256)                (B, 9, 256)
-        │                          │
-        └──────── Decoder ─────────┘
-              CrossAttention (기본)
-              or SelfAttention (ViNT 스타일, ablation용)
-                      │
-                 (B, 256)
-                      │
-               WaypointHead
-          Linear(256,128) → ReLU → Linear(128, H×2)
-                      │
-             웨이포인트 (B, 5, 2)
-           로봇 바디 프레임 상대 좌표, [-1, 1] 정규화
+관측 이미지 (4장)               지도+경로 이미지 (1장)
+전방 현재 + 과거 3장             OSM 타일 + 경로 오버레이 (heading-up)
+        │                               │
+  VisualEncoder                   MapEncoder
+  EfficientNet-B0                 EfficientNet-B0
+  GAP → Linear(1280, 256)         GAP → Linear(1280, 256)
+  (B, 4, 256)                     (B, 1, 256)
+        │                               │
+        └──────────── Decoder ──────────┘
+             SelfAttention (기본)
+             [obs×4, map×1] → 5-token Transformer × 4
+             → obs 위치 mean pool → (B, 256)
+             or CrossAttention (ablation)
+                       │
+                WaypointHead
+           Linear(256,128) → ReLU → Linear(128, H×2)
+                       │
+              웨이포인트 (B, 5, 2)
+            로봇 바디 프레임 상대 좌표, [-1, 1] 정규화
 ```
 
 ---
@@ -71,11 +71,7 @@ pip install requests pillow rosbags opencv-python tqdm
 ## 빠른 시작
 
 ```bash
-# 파이프라인 검증 (실제 데이터 불필요)
-python scripts/train.py training.dummy=true
-
-# Sanity check (100 iter 후 waypoint_loss < 0.05)
-python scripts/sanity_check.py
+python scripts/train.py data.data_dir=/path/to/data
 ```
 
 ---
@@ -143,7 +139,7 @@ dataset/
       obs_0.png        # 전방 카메라, 현재 프레임
       obs_1.png        # 전방 카메라, 0.5초 전
       obs_2.png        # 전방 카메라, 1.0초 전
-      obs_3.png        # 후방 카메라, 현재 프레임
+      obs_3.png        # 전방 카메라, 1.5초 전
       map.png          # OSM 지도 + 경로 오버레이 (224×224, heading-up, crop_ratio=0.7)
       meta.json        # gt_waypoints, route_direction, osm_snap_mean_m, …
     ...
@@ -167,7 +163,7 @@ python scripts/train.py
 # 설정 오버라이드
 python scripts/train.py \
     training.batch_size=64 \
-    decoder.type=self_attention \
+    decoder.type=cross_attention \
     training.learning_rate=3e-4
 
 # Hybrid 지도 ablation
@@ -186,8 +182,9 @@ python scripts/train.py --config-name ablation_map_hybrid
 | `map.crop_ratio` | 0.7 | 회전 후 중앙 크롭 비율 (< 1.0 이면 줌인) |
 | `map.mode` | `"rgb"` | `"hybrid"` 구현됨, 현재 미사용 |
 | `model.token_dim` | 256 | 임베딩 차원 |
+| `model.obs_context_length` | 3 | 과거 전방 프레임 수 (총 obs = K+1) |
 | `model.prediction_horizon` | 5 | 예측 웨이포인트 수 |
-| `decoder.type` | `cross_attention` | `self_attention`으로 변경 시 ViNT 스타일 |
+| `decoder.type` | `self_attention` | `cross_attention`으로 변경 시 ablation |
 | `encoder.freeze_epochs` | 5 | 초기 backbone 고정 에폭 수 |
 | `data.max_waypoint_distance` | 2.5 | 웨이포인트 정규화 기준 (미터) |
 
@@ -223,7 +220,6 @@ dynav/
 │   ├── dynav_gui.py                  # 파이프라인 GUI
 │   ├── view_samples.py               # 샘플 빠른 뷰어
 │   ├── record_bag.py
-│   ├── sanity_check.py
 │   └── visualize_attention.py
 └── tests/
     ├── test_map.py

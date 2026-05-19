@@ -13,7 +13,7 @@ from dynav.models.map_nav_model import DyNavModel
 
 # ── Config helpers ─────────────────────────────────────────────────────────────
 
-def _load_cfg(decoder_type: str = "cross_attention") -> object:
+def _load_cfg(decoder_type: str = "self_attention") -> object:
     """Load default config and override decoder type."""
     cfg = OmegaConf.load("configs/default.yaml")
     cfg.decoder.type = decoder_type
@@ -32,8 +32,8 @@ def self_model() -> DyNavModel:
     return DyNavModel.from_config(_load_cfg("self_attention"))
 
 
-def _dummy_inputs(batch: int = 2) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return (observations, map_image) dummy tensors."""
+def _make_inputs(batch: int = 2) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (observations, map_image) random tensors for testing."""
     obs = torch.randn(batch, 4, 3, 224, 224)   # (B, N_obs, C, H, W)
     mp  = torch.randn(batch, 3, 224, 224)       # (B, C, H, W)
     return obs, mp
@@ -48,7 +48,7 @@ class TestForwardShape:
     def test_waypoints_shape(self, request: pytest.FixtureRequest, model_fixture: str) -> None:
         """Waypoints output must be (B, H, 2) = (2, 5, 2)."""
         model: DyNavModel = request.getfixturevalue(model_fixture)
-        obs, mp = _dummy_inputs()
+        obs, mp = _make_inputs()
         with torch.no_grad():
             out = model(obs, mp)
         assert out["waypoints"].shape == (2, 5, 2), (
@@ -57,27 +57,27 @@ class TestForwardShape:
 
     def test_cross_attention_weights_shape(self, cross_model: DyNavModel) -> None:
         """Cross-attention weights must be a list of 4 tensors, each (B, N_o, N_m)."""
-        obs, mp = _dummy_inputs()
+        obs, mp = _make_inputs()
         with torch.no_grad():
             out = cross_model(obs, mp, return_attention=True)
         attn = out["attention_weights"]
         assert attn is not None
         assert len(attn) == 4
         for i, w in enumerate(attn):
-            assert w.shape == (2, 4, 9), (
-                f"Layer {i}: expected (2, 4, 9), got {tuple(w.shape)}"
+            assert w.shape == (2, 4, 1), (
+                f"Layer {i}: expected (2, 4, 1), got {tuple(w.shape)}"
             )
 
     def test_attention_none_by_default(self, cross_model: DyNavModel) -> None:
         """Without return_attention, attention_weights must be None."""
-        obs, mp = _dummy_inputs()
+        obs, mp = _make_inputs()
         with torch.no_grad():
             out = cross_model(obs, mp)
         assert out["attention_weights"] is None
 
     def test_self_attention_weights_always_none(self, self_model: DyNavModel) -> None:
         """SelfAttentionDecoder always returns None for attention_weights."""
-        obs, mp = _dummy_inputs()
+        obs, mp = _make_inputs()
         with torch.no_grad():
             out = self_model(obs, mp, return_attention=True)
         assert out["attention_weights"] is None
@@ -153,7 +153,7 @@ class TestBackwardPass:
         model: DyNavModel = request.getfixturevalue(model_fixture)
         model.zero_grad()
 
-        obs, mp = _dummy_inputs()
+        obs, mp = _make_inputs()
         out = model(obs, mp)
         loss = out["waypoints"].sum()
         loss.backward()

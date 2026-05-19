@@ -11,12 +11,14 @@
 # ---------------------------------------------------------------------------
 # FrodoBots source data (output_rides_* + valid_segments_*.json)
 # ---------------------------------------------------------------------------
-frodo_root: /home/hmmdyn/data/frodobots
+# frodo_root: /home/hmmdyn/data/frodobots
+frodo_root: /media/hmmdyn/T31/data/frodobots
 
 # ---------------------------------------------------------------------------
 # Dataset output root  (train/, val/, gifs/, frames/ live here)
 # ---------------------------------------------------------------------------
-dataset_root: /home/hmmdyn/data/frodobots/dataset
+#dataset_root: /home/hmmdyn/data/frodobots/dataset
+dataset_root: /media/hmmdyn/T31/data/frodobots/dataset
 
 # ---------------------------------------------------------------------------
 # Caches  (can be on a fast SSD; shared across runs)

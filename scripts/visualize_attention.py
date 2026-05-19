@@ -1,21 +1,21 @@
 """Visualize cross-attention weights from a trained DyNavModel checkpoint.
 
-For each observation token (front_current, front_past1, front_past2, rear),
-shows how strongly it attends to each 7×7 cell of the map across all decoder
-layers.
+Only valid when the checkpoint was trained with decoder.type=cross_attention.
+
+For each observation token, shows how strongly it attends to each map token
+across all decoder layers.
 
 Default layout (averaged):
-    rows: N_obs observation tokens (4)
+    rows: N_obs observation tokens
     cols: obs image | layer-0 heatmap | … | layer-{L-1} heatmap | map image
 
 Per-head layout (--per-head):
-    rows: N_obs observation tokens (4)
+    rows: N_obs observation tokens
     cols: obs image | L0H0 | L0H1 | … | L{L-1}H{H-1} | map image
-    Each cell is titled "Layer L, Head H".
 
 Usage:
-    python scripts/visualize_attention.py --checkpoint outputs/.../checkpoints/best.pt
-    python scripts/visualize_attention.py --checkpoint best.pt --output viz.png --sample 2
+    python scripts/visualize_attention.py --checkpoint outputs/.../best.pt \\
+        --data-dir data/ --split val --sample-idx 0
     python scripts/visualize_attention.py --checkpoint best.pt --per-head
 """
 
@@ -74,6 +74,8 @@ def _to_display(t: torch.Tensor) -> np.ndarray:
 
 def visualize(
     checkpoint: str,
+    data_dir: str,
+    split: str = "val",
     config: str | None = None,
     output: str = "attention_viz.png",
     sample_idx: int = 0,
@@ -83,9 +85,11 @@ def visualize(
 
     Args:
         checkpoint: Path to trained model checkpoint.
+        data_dir: Root data directory (passed to DyNavDataset).
+        split: Dataset split to load the sample from.
         config: Optional YAML config override path.
         output: Output PNG file path.
-        sample_idx: Which sample from DummyDyNavDataset to visualize.
+        sample_idx: Which sample index to visualize.
         per_head: If True, show per-head heatmaps instead of averaged.
     """
     import matplotlib
@@ -102,17 +106,10 @@ def visualize(
         )
         sys.exit(1)
 
-    # ── Build a sample from DummyDyNavDataset ──────────────────────────────────
-    from dynav.data.dataset import DummyDyNavDataset
+    # ── Load a real sample from DyNavDataset ───────────────────────────────────
+    from dynav.data.dataset import DyNavDataset
 
-    n_obs = cfg.model.obs_context_length + 2
-    ds = DummyDyNavDataset(
-        size=max(sample_idx + 1, 10),
-        n_obs=n_obs,
-        image_size=cfg.data.image_size,
-        horizon=cfg.model.prediction_horizon,
-        seed=0,
-    )
+    ds = DyNavDataset(data_dir, split=split, image_size=cfg.data.image_size)
     sample = ds[sample_idx]
     obs = sample["observations"].unsqueeze(0)   # (1, N_obs, 3, H, W)
     mp  = sample["map_image"].unsqueeze(0)       # (1, 3, H, W)
@@ -122,7 +119,7 @@ def visualize(
         out = model(obs, mp, return_attention=not per_head, return_per_head=per_head)
 
     waypoints = out["waypoints"][0].numpy()      # (H, 2) — for title display
-    attn_list = out["attention_weights"]         # List[(1, N_o, 9)] or List[(1, n_heads, N_o, 9)]
+    attn_list = out["attention_weights"]         # List[(1, N_o, N_m)] or List[(1, n_heads, N_o, N_m)]
 
     if attn_list is None:
         print(
@@ -133,7 +130,7 @@ def visualize(
         sys.exit(1)
 
     n_layers = len(attn_list)
-    obs_labels = ["front (t)", "front (t-1)", "front (t-2)", "rear (t)"]
+    obs_labels = ["front (t)", "front (t-1)", "front (t-2)", "front (t-3)"]
 
     wp_str = "  ".join(f"({x:.2f},{y:.2f})" for x, y in waypoints)
 
@@ -211,9 +208,12 @@ def _visualize_averaged(
 
         for layer_idx in range(n_layers):
             ax = axes[row, layer_idx + 1]
-            # attn_list[layer_idx]: (1, N_o, 9) — select batch 0, obs row
-            attn_flat = attn_list[layer_idx][0, row]          # (9,)
-            attn_map  = attn_flat.reshape(3, 3).numpy()       # (3, 3)
+            # attn_list[layer_idx]: (1, N_o, N_m) — select batch 0, obs row
+            attn_flat = attn_list[layer_idx][0, row]          # (N_m,)
+            n_m = attn_flat.shape[0]
+            import math as _math
+            grid = int(_math.isqrt(n_m))
+            attn_map = attn_flat.reshape(grid, max(grid, n_m // max(grid, 1))).numpy()
             im = ax.imshow(attn_map, cmap="hot", vmin=0.0, vmax=attn_map.max())
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
             ax.set_xticks([])
@@ -272,11 +272,14 @@ def _visualize_per_head(
 
         col = 1
         for layer_idx in range(n_layers):
-            # attn_list[layer_idx]: (1, n_heads, N_o, 9)
+            # attn_list[layer_idx]: (1, n_heads, N_o, N_m)
             for head_idx in range(n_heads):
                 ax = axes[row, col]
-                attn_flat = attn_list[layer_idx][0, head_idx, row]   # (9,)
-                attn_map  = attn_flat.reshape(3, 3).numpy()           # (3, 3)
+                attn_flat = attn_list[layer_idx][0, head_idx, row]   # (N_m,)
+                n_m = attn_flat.shape[0]
+                import math as _math
+                grid = int(_math.isqrt(n_m))
+                attn_map = attn_flat.reshape(grid, max(grid, n_m // max(grid, 1))).numpy()
                 im = ax.imshow(attn_map, cmap="hot", vmin=0.0, vmax=attn_map.max())
                 plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
                 ax.set_xticks([])
@@ -307,12 +310,20 @@ def _parse_args() -> argparse.Namespace:
         help="Optional YAML config override (default: use config embedded in checkpoint).",
     )
     parser.add_argument(
+        "--data-dir", required=True,
+        help="Root data directory (same as data.data_dir in config).",
+    )
+    parser.add_argument(
+        "--split", default="val",
+        help="Dataset split to load sample from (default: val).",
+    )
+    parser.add_argument(
         "--output", default="attention_viz.png",
         help="Output image file path (default: attention_viz.png).",
     )
     parser.add_argument(
-        "--sample", type=int, default=0,
-        help="DummyDyNavDataset sample index to visualize (default: 0).",
+        "--sample-idx", type=int, default=0,
+        help="Sample index to visualize (default: 0).",
     )
     parser.add_argument(
         "--per-head", action="store_true", default=False,
@@ -325,8 +336,10 @@ if __name__ == "__main__":
     args = _parse_args()
     visualize(
         checkpoint=args.checkpoint,
+        data_dir=args.data_dir,
+        split=args.split,
         config=args.config,
         output=args.output,
-        sample_idx=args.sample,
+        sample_idx=args.sample_idx,
         per_head=args.per_head,
     )

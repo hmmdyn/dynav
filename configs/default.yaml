@@ -1,16 +1,15 @@
 model:
   token_dim: 256                    # d — embedding dimension
-  obs_context_length: 2             # K — number of past frames
+  obs_context_length: 3             # K — number of past front frames (total obs = K+1)
   prediction_horizon: 5             # H — number of waypoints to predict
 
 encoder:
   backbone: "efficientnet_b0"
   pretrained: true
   freeze_epochs: 5                  # freeze encoder for first N epochs
-  map_pos_enc: "learnable"          # "learnable" or "sinusoidal"
 
 decoder:
-  type: "cross_attention"           # "cross_attention" or "self_attention"
+  type: "self_attention"            # "cross_attention" or "self_attention"
   n_layers: 4
   n_heads: 4
   d_ff: 512
@@ -39,8 +38,6 @@ training:
   save_every: 10                    # save checkpoint every N epochs
   num_workers: 4                    # DataLoader worker processes
   use_wandb: false                  # enable wandb logging
-  dummy: false                      # use DummyDyNavDataset instead of real data
-  dummy_size: 100                   # number of dummy samples
 
 data:
   data_dir: "data"                  # root directory for real datasets

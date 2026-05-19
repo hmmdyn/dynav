@@ -44,8 +44,8 @@ class DyNavModel(nn.Module):
 
         # ── Config aliases ─────────────────────────────────────────────────────
         token_dim: int = cfg.model.token_dim
-        # N_obs: current front + K past front frames + current rear
-        n_obs: int = cfg.model.obs_context_length + 2
+        # N_obs: current front + K past front frames (no rear camera)
+        n_obs: int = cfg.model.obs_context_length + 1
         horizon: int = cfg.model.prediction_horizon
         pretrained: bool = cfg.encoder.pretrained
 
@@ -61,7 +61,6 @@ class DyNavModel(nn.Module):
         self.map_encoder = MapEncoder(
             token_dim=token_dim,
             pretrained=pretrained,
-            pos_enc_type=cfg.encoder.get("map_pos_enc", "learnable"),
         )
 
         # ── Decoder (selected by config) ───────────────────────────────────────
@@ -125,7 +124,7 @@ class DyNavModel(nn.Module):
                   — ``None`` otherwise.
         """
         obs_tokens = self.visual_encoder(observations)    # (B, N_obs, d)
-        map_tokens = self.map_encoder(map_image)          # (B, 9, d)
+        map_tokens = self.map_encoder(map_image)          # (B, 1, d)
 
         context, attn_weights = self.decoder(
             obs_tokens, map_tokens,

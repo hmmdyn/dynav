@@ -15,17 +15,17 @@ Two planned models:
 ## Architecture
 
 ### Inputs
-- **Observations:** 4 images — front camera (current + 2 past) + rear camera (current). Each 224×224 RGB.
+- **Observations:** 4 images — front camera (current + 3 past). Each 224×224 RGB.
 - **Map+Path Image:** 224×224 RGB — OSM top-down map, heading-up, route in red, robot as blue circle, goal as green circle.
 
 ### Encoders
 - **VisualEncoder:** Each obs image → EfficientNet-B0 → GAP → Linear(1280, 256) → 1 token. 4 images → `obs_tokens ∈ (B, 4, 256)`.
-- **MapEncoder:** Map image → EfficientNet-B0 → AdaptiveAvgPool2d(3×3) → Linear(1280, 256) → 9 tokens + 2D pos enc → `map_tokens ∈ (B, 9, 256)`.
-  - Pos enc: `"learnable"` (default, `nn.Parameter`) or `"sinusoidal"` (fixed buffer).
+- **MapEncoder:** Map image → EfficientNet-B0 → GlobalAvgPool → Linear(1280, 256) → 1 token → `map_tokens ∈ (B, 1, 256)`.
+  - Single-token GAP is noise-robust: GPS, heading, and path centerline errors all cause horizontal displacement in heading-up maps — GAP is invariant to such shifts.
 
 ### Decoder
-- **CrossAttentionDecoder** (default): Self-Attn(obs) → Cross-Attn(Q=obs, K/V=map) → FFN × 4. Output: `context ∈ (B, 256)` via mean pool.
-- **SelfAttentionDecoder** (ViNT-style baseline): Cat(obs, map) → Self-Attn → FFN × 4. Output: mean pool over obs positions.
+- **SelfAttentionDecoder** (default): Cat(obs[4], map[1]) → Self-Attn → FFN × 4. 5-token sequence. Output: mean pool over obs positions → `context ∈ (B, 256)`.
+- **CrossAttentionDecoder** (ablation): Self-Attn(obs) → Cross-Attn(Q=obs, K/V=map) → FFN × 4. Output: mean pool → `context ∈ (B, 256)`.
 
 ### Action Head
 `WaypointHead`: Linear(256, 128) → ReLU → Linear(128, H×2) → reshape `(H, 2)`.  
@@ -122,7 +122,7 @@ dynav/
 ├── CLAUDE.md
 ├── configs/
 │   ├── map.yaml                          # shared map config (tile, render, crop_ratio)
-│   ├── paths.yaml                        # environment-specific data paths (NEW)
+│   ├── paths.yaml                        # environment-specific data paths
 │   ├── default.yaml                      # model hyperparameters
 │   ├── rosbag_topics.yaml
 │   ├── record_topics.yaml
@@ -135,7 +135,7 @@ dynav/
 │   │   ├── __init__.py
 │   │   ├── tiles.py                      # TileCache, stitch_tiles
 │   │   ├── routing.py                    # OSRMRouter (추론용 유지)
-│   │   ├── osm_snap.py                   # Overpass+Dijkstra 오프라인 스냅 (NEW)
+│   │   ├── osm_snap.py                   # Overpass+Dijkstra 오프라인 스냅
 │   │   ├── segment.py                    # segment_gps_episode
 │   │   ├── overlay.py                    # visual constants + drawing
 │   │   └── renderer.py                   # MapRenderer (crop_ratio 파라미터 추가됨)
@@ -149,7 +149,6 @@ dynav/
 ├── scripts/
 │   ├── train.py
 │   ├── evaluate.py
-│   ├── sanity_check.py
 │   ├── visualize_attention.py
 │   ├── record_bag.py
 │   ├── extract_rosbag.py                 # rosbag → training samples (OSRM)
@@ -183,8 +182,8 @@ dynav/
 ### EfficientNet-B0
 ```python
 # model.features → (B, 1280, 7, 7)
-# VisualEncoder: features + avgpool → (B, 1280) → project → (B, d)
-# MapEncoder:   features → AdaptiveAvgPool2d(3,3) → (B, 9, 1280) → project → (B, 9, d)
+# VisualEncoder: features → GAP → (B, 1280) → project → (B, d)     [per obs image]
+# MapEncoder:   features → GAP → (B, 1280, 1, 1) → project → (B, 1, d)
 ```
 
 ### Heading-up rotation
