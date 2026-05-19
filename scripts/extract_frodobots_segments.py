@@ -7,6 +7,8 @@ extract_frodobots_segments.py — FrodoBots raw ride 데이터에서 세그먼�
        형식: { ride_id: { "segments": [ {seg_idx, frame_ids, frame_lat, frame_lon,
                                          n_frames, net_disp_m, avg_speed_ms, straightness} ] } }
 
+output_rides_* 디렉토리를 frodo_root에서 자동 탐색 (하드코딩 없음).
+
 세그먼트 분할 기준:
   - GPS 속도 < STOP_SPEED_MS 가 STOP_WINDOW_S 이상 지속 → 세그먼트 경계
   - GPS 타임스탬프 갭 > GPS_GAP_S → 강제 분할
@@ -19,7 +21,6 @@ extract_frodobots_segments.py — FrodoBots raw ride 데이터에서 세그먼�
   DYNAV_SEG_STOP_WINDOW  (default 3.0 s)
   DYNAV_SEG_GPS_GAP      (default 5.0 s)
   DYNAV_SEG_MIN_FRAMES   (default 50, stride-10 기준)
-  DYNAV_SEG_GROUPS       (default "rides0,rides2,rides22,rides23")
   DYNAV_FRODO_ROOT       FrodoBots 데이터 루트 (configs/paths.yaml 오버라이드)
 
 Usage::
@@ -46,19 +47,6 @@ STOP_SPEED_MS  = float(os.environ.get("DYNAV_SEG_STOP_SPEED",  "0.4"))
 STOP_WINDOW_S  = float(os.environ.get("DYNAV_SEG_STOP_WINDOW", "3.0"))
 GPS_GAP_S      = float(os.environ.get("DYNAV_SEG_GPS_GAP",     "5.0"))
 MIN_SEG_FRAMES = int(  os.environ.get("DYNAV_SEG_MIN_FRAMES",  "50"))
-
-ALL_GROUP_DIRS = {
-    "rides0":  "output_rides_0",
-    "rides2":  "output_rides_2",
-    "rides22": "output_rides_22",
-    "rides23": "output_rides_23",
-}
-SEG_GROUPS = [
-    g.strip()
-    for g in os.environ.get("DYNAV_SEG_GROUPS",
-                             "rides0,rides2,rides22,rides23").split(",")
-    if g.strip()
-]
 
 
 # ── path loading ──────────────────────────────────────────────────────────────
@@ -283,18 +271,18 @@ def main() -> None:
 
     print(f"파라미터: stop_speed={STOP_SPEED_MS} m/s  stop_window={STOP_WINDOW_S}s  "
           f"gps_gap={GPS_GAP_S}s  min_frames={MIN_SEG_FRAMES}")
-    print(f"FrodoBots root: {frodo_root}")
-    print(f"처리 그룹: {SEG_GROUPS}\n")
+    print(f"FrodoBots root: {frodo_root}\n")
 
-    for group in SEG_GROUPS:
-        subdir = ALL_GROUP_DIRS.get(group)
-        if subdir is None:
-            print(f"[skip] 알 수 없는 그룹: {group}")
-            continue
-        rides_dir = frodo_root / subdir
-        if not rides_dir.exists():
-            print(f"[skip] 디렉토리 없음: {rides_dir}")
-            continue
+    rides_dirs = sorted(frodo_root.glob("output_rides_*"))
+    if not rides_dirs:
+        print(f"[error] {frodo_root} 에서 output_rides_* 디렉토리를 찾을 수 없음")
+        return
+    print(f"발견된 rides 디렉토리: {[d.name for d in rides_dirs]}\n")
+
+    for rides_dir in rides_dirs:
+        # output_rides_0 → rides0, output_rides_22 → rides22
+        suffix = rides_dir.name[len("output_"):]   # "rides_0" → "rides0" after replace
+        group  = suffix.replace("_", "", 1)         # "rides_0" → "rides0"
 
         out_path = frodo_root / f"valid_segments_{group}.json"
 

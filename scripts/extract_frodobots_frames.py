@@ -11,11 +11,12 @@ segment에 필요한 frame_id만 남기고 나머지를 삭제.
 
 이미 필요한 프레임이 모두 있는 ride는 건너뜀.
 
+valid_segments_*.json 파일을 frodo_root에서 자동 탐색 (하드코딩 없음).
+
 환경변수:
   DYNAV_FRODO_ROOT      FrodoBots 데이터 루트
   DYNAV_DATASET_ROOT    dataset 출력 루트
   DYNAV_FRAME_QUALITY   JPEG 품질 (-q:v, 2=최고~31=최저, default 3)
-  DYNAV_FRAME_GROUPS    처리 그룹 (default "rides0,rides2,rides22,rides23")
   DYNAV_FRAME_FORCE     "1" 이면 이미 추출된 ride도 재추출
 
 Usage::
@@ -40,19 +41,6 @@ sys.path.insert(0, str(_REPO))
 OBS_STRIDE   = 10
 JPEG_QUALITY = int(os.environ.get("DYNAV_FRAME_QUALITY", "3"))
 FORCE        = os.environ.get("DYNAV_FRAME_FORCE", "0") == "1"
-
-ALL_GROUP_DIRS = {
-    "rides0":  "output_rides_0",
-    "rides2":  "output_rides_2",
-    "rides22": "output_rides_22",
-    "rides23": "output_rides_23",
-}
-FRAME_GROUPS = [
-    g.strip()
-    for g in os.environ.get("DYNAV_FRAME_GROUPS",
-                             "rides0,rides2,rides22,rides23").split(",")
-    if g.strip()
-]
 
 
 # ── path loading ──────────────────────────────────────────────────────────────
@@ -155,14 +143,20 @@ def main() -> None:
     frame_base = dataset_root / "frames"
     frame_base.mkdir(parents=True, exist_ok=True)
 
-    # load all valid_segments
+    # load all valid_segments (auto-discover from frodo_root)
+    seg_files = sorted(frodo_root.glob("valid_segments_*.json"))
+    if not seg_files:
+        print(f"[error] {frodo_root} 에서 valid_segments_*.json 없음")
+        print("        extract_frodobots_segments.py 먼저 실행하세요")
+        return
+
     all_segs: dict = {}  # ride_id → {segments, rides_dir}
-    for group in FRAME_GROUPS:
-        seg_file  = frodo_root / f"valid_segments_{group}.json"
-        group_dir = frodo_root / ALL_GROUP_DIRS.get(group, "")
-        if not seg_file.exists():
-            print(f"[skip] {seg_file.name} 없음 — extract_frodobots_segments.py 먼저 실행")
-            continue
+    for seg_file in seg_files:
+        # valid_segments_rides0.json → group "rides0" → output_rides_0
+        group     = seg_file.stem[len("valid_segments_"):]   # e.g. "rides0"
+        # "rides0" → "rides_0", "rides22" → "rides_22"
+        suffix    = group[:5] + "_" + group[5:]              # "rides" + "_" + "0"
+        group_dir = frodo_root / f"output_{suffix}"
         if not group_dir.exists():
             print(f"[skip] {group}: rides 디렉토리 없음 ({group_dir})")
             continue
