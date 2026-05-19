@@ -62,6 +62,13 @@ def _load_paths(paths_config: Path) -> tuple:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+def _path_exists(p: Path) -> bool:
+    try:
+        return p.exists()
+    except OSError:
+        return False
+
+
 def find_ride_dir(group_dir: Path, ride_id: str) -> Path | None:
     matches = list(group_dir.glob(f"ride_{ride_id}_*"))
     return matches[0] if matches else None
@@ -70,7 +77,7 @@ def find_ride_dir(group_dir: Path, ride_id: str) -> Path | None:
 def find_m3u8(ride_dir: Path, uid: str = "1000") -> Path | None:
     """Return front-camera m3u8 (uid_s_1000) from recordings/."""
     recordings = ride_dir / "recordings"
-    if not recordings.exists():
+    if not _path_exists(recordings):
         return None
     matches = sorted(recordings.glob(f"*__uid_s_{uid}__uid_e_video.m3u8"))
     return matches[0] if matches else None
@@ -170,7 +177,7 @@ def main() -> None:
         # "rides0" → "rides_0", "rides22" → "rides_22"
         suffix    = group[:5] + "_" + group[5:]              # "rides" + "_" + "0"
         group_dir = frodo_root / f"output_{suffix}"
-        if not group_dir.exists():
+        if not _path_exists(group_dir):
             print(f"[skip] {group}: rides 디렉토리 없음 ({group_dir})")
             continue
         for ride_id, v in json.loads(seg_file.read_text()).items():
