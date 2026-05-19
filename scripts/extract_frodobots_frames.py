@@ -106,7 +106,14 @@ def extract_all_stride10(m3u8_path: Path, out_dir: Path, quality: int = 3) -> No
         "-loglevel", "error",
         str(out_dir / "%06d.jpg"),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        raise RuntimeError(
+            "ffmpeg를 찾을 수 없습니다. 설치 후 재시도하세요.\n"
+            "  Ubuntu/Debian: sudo apt install ffmpeg\n"
+            "  conda:         conda install -c conda-forge ffmpeg"
+        )
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg 오류:\n{result.stderr[:500]}")
 
@@ -138,6 +145,12 @@ def main() -> None:
                         default=_REPO / "configs" / "paths.yaml",
                         help="Path to paths.yaml")
     args = parser.parse_args()
+
+    if shutil.which("ffmpeg") is None:
+        print("[error] ffmpeg를 찾을 수 없습니다. 설치 후 재시도하세요.")
+        print("  Ubuntu/Debian: sudo apt install ffmpeg")
+        print("  conda:         conda install -c conda-forge ffmpeg")
+        sys.exit(1)
 
     frodo_root, dataset_root = _load_paths(args.paths_config)
     frame_base = dataset_root / "frames"
