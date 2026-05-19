@@ -1,0 +1,13 @@
+# @package _global_
+# RTX 5090 hardware profile — Blackwell, 32GB VRAM
+# Usage: python scripts/train.py --config-name 5090 data.data_dir=/path/to/dataset
+#        python scripts/train.py --config-name train_frodobots training.batch_size=128 training.num_workers=12 training.amp=true
+
+defaults:
+  - default
+  - _self_
+
+training:
+  batch_size: 128                   # saturates BF16 tensor cores without OOM
+  num_workers: 12                   # parallel DataLoader workers for fast throughput
+  amp: true                         # BF16 autocast — no GradScaler needed (BF16 ≠ FP16)
