@@ -208,7 +208,7 @@ def main() -> None:
 
         with tempfile.TemporaryDirectory(prefix=f"dynav_frames_{ride_id}_") as tmp:
             try:
-                extract_all_stride10(Path(tmp), Path(tmp), quality=JPEG_QUALITY)
+                extract_all_stride10(m3u8, Path(tmp), quality=JPEG_QUALITY)
             except RuntimeError as e:
                 print(f"[{ri+1}/{total_rides}] ride {ride_id}: {e}")
                 continue
