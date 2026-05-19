@@ -17,4 +17,6 @@ training:
   save_every: 5
   num_workers: 12
   use_wandb: true
+  wandb_project: "dynav"
+  wandb_entity: "YOUR_WANDB_ENTITY"    # wandb username or team name
   amp: true                         # BF16 autocast — Blackwell architecture

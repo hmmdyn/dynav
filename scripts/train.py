@@ -196,7 +196,8 @@ def main(cfg: DictConfig) -> None:
         log.warning("wandb not installed — logging disabled")
     if use_wandb:
         _wandb.init(
-            project="dynav",
+            project=cfg.training.get("wandb_project", "dynav"),
+            entity=cfg.training.get("wandb_entity", None),
             config=OmegaConf.to_container(cfg, resolve=True),
         )
 
