@@ -235,10 +235,17 @@ def extract_ride_segments(ride_dir: Path, ride_id: str) -> list:
     return result
 
 
+def _is_dir_safe(p: Path) -> bool:
+    try:
+        return p.is_dir()
+    except OSError:
+        return False
+
+
 def process_group(group_name: str, rides_dir: Path, existing: dict) -> dict:
     result = dict(existing)
     ride_dirs = sorted([d for d in rides_dir.iterdir()
-                        if d.is_dir() and d.name.startswith("ride_")])
+                        if _is_dir_safe(d) and d.name.startswith("ride_")])
     total = len(ride_dirs)
     t0 = time.time()
 
