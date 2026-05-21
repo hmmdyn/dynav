@@ -35,7 +35,7 @@ Output: H=5 relative waypoints (Δx, Δy) in robot body frame, normalized to [-1
 
 ## Map Module (`dynav/map/`)
 
-Self-contained package. No external submodules (osmnav removed).
+Self-contained package.
 
 ### Visual constants — identical across ALL contexts
 ```python
