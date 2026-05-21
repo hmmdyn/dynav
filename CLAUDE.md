@@ -238,8 +238,7 @@ frodo_root/valid_segments_*.json (glob, 자동 탐색) + dataset/frames/
 필터 파라미터 env var: `DYNAV_OSM_SNAP_THRESH` `DYNAV_NET_DISP` `DYNAV_SPEED` `DYNAV_STRAIGHTNESS` `DYNAV_SAMPLE_STRIDE`
 
 **현재 생성된 데이터셋 (2026-05-18):**  
-train 28,081개 + val 3,421개 = 31,502개 샘플 (rides0, rides2 기반)  
-rides22, rides23 신규 데이터 추가 예정.
+rides0~4 기반 후처리 스크립트 수동 구동으로 필터링 → train 4,483개 + val 502개 = 4,985개 샘플 (이 데이터로 학습 진행)
 
 ---
 
