@@ -1,10 +1,13 @@
 # CLAUDE.md — Map Navigation Model (dynav)
 
+> **이 문서는 as-built 스펙이다** — 현재 코드·`configs/`가 실제로 하는 것만 기술한다. 숫자(레이어·λ 등)의 권위는 `configs/*.yaml`이며, 본 문서는 그 값을 설명·참조하되 결정의 *이유*는 적지 않는다.
+> **결정됐으나 아직 코드에 반영되지 않은 변경**(as-decided)은 여기 쓰지 않는다 — vault `Wiki/Projects/Dynav/Map-Nav.md` 결정 로그에 있고, 반영 작업은 `Daily/Tasks`로 추적된다 (루트 `CLAUDE.md` 규칙 7, 3-state).
+
 ## Project Overview
 
 Lightweight dual-mode navigation model for outdoor robot navigation on edge devices (NVIDIA Jetson Orin Nano Super, 8GB RAM, 67 TOPS). Robot platform: Clearpath Jackal UGV (4×4 differential drive, cmd_vel interface).
 
-**Phase 1 — Data pipeline complete; ready for real-world training.**
+**Phase 1 — 데이터 파이프라인 완성, 학습 단계 진입.** (진행 상태의 SSOT는 vault `Wiki/Projects/Dynav/Map-Nav.md` + `Daily/Projects/Map-Nav.md`.)
 
 Two planned models:
 1. **Map Navigation Model** (this phase): OSM map image + route overlay + egocentric camera → relative waypoints for long-range navigation (500m–1km).
@@ -107,11 +110,9 @@ L_waypoint  = (1/H) Σ ||â_i - a*_i||₁           # L1 regression
 L_direction = 1 - cos(α̂, α*_route)               # route alignment
 L_progress  = -(1/H) Σ (â_i · d̂_route)           # progress incentive
 L_smooth    = (1/(H-1)) Σ ||â_{i+1} - â_i||²     # smoothness
-
-λ1=0.5, λ2=0.1, λ3=0.01 (defaults)
 ```
 
-Each term individually disabled via `enable_direction/progress/smooth` config flags.
+λ1·λ2·λ3 및 enable 플래그의 값은 **`configs/default.yaml`의 `loss.*`가 권위** (`lambda_direction`/`lambda_progress`/`lambda_smooth`, `enable_direction`/`progress`/`smooth`). 이 문서는 수식 형태만 고정하고 수치는 config를 따른다.
 
 ---
 
