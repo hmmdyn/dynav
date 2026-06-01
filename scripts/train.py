@@ -119,10 +119,15 @@ def _eval_one_epoch(
     criterion: nn.Module,
     device: torch.device,
     use_amp: bool = False,
-) -> float:
-    """Run one validation epoch and return mean total loss."""
+) -> dict[str, float]:
+    """Run one validation epoch.
+
+    Returns:
+        Dict of averaged loss components for the epoch (keys: ``loss/total``,
+        ``loss/waypoint``, ``loss/direction``, ``loss/progress``, ``loss/smooth``).
+    """
     model.eval()
-    total_loss = 0.0
+    running: dict[str, float] = {}
     for batch in loader:
         obs  = batch["observations"].to(device)
         mp   = batch["map_image"].to(device)
@@ -130,9 +135,12 @@ def _eval_one_epoch(
         rdir = batch["route_direction"].to(device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
             out  = model(obs, mp)
-            loss, _ = criterion(out["waypoints"], gt, rdir)
-        total_loss += loss.item()
-    return total_loss / max(len(loader), 1)
+            _, loss_dict = criterion(out["waypoints"], gt, rdir)
+        for k, v in loss_dict.items():
+            running[k] = running.get(k, 0.0) + v.item()
+
+    n = max(len(loader), 1)
+    return {k: v / n for k, v in running.items()}
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -212,6 +220,8 @@ def main(cfg: DictConfig) -> None:
 
     best_val_loss = math.inf
     save_every    = cfg.training.save_every
+    patience      = cfg.training.get("early_stopping_patience", 0)
+    epochs_no_improve = 0
 
     # ── Training loop ──────────────────────────────────────────────────────────
     for epoch in range(cfg.training.epochs):
@@ -222,7 +232,8 @@ def main(cfg: DictConfig) -> None:
             log.info(f"Epoch {epoch}: encoder backbone unfrozen")
 
         train_losses = _train_one_epoch(model, train_loader, criterion, optimizer, device, use_amp)
-        val_loss     = _eval_one_epoch(model, val_loader, criterion, device, use_amp)
+        val_losses   = _eval_one_epoch(model, val_loader, criterion, device, use_amp)
+        val_loss     = val_losses["loss/total"]
 
         scheduler.step()
         current_lr = optimizer.param_groups[0]["lr"]
@@ -238,8 +249,8 @@ def main(cfg: DictConfig) -> None:
             _wandb.log({
                 "epoch": epoch,
                 "lr":    current_lr,
-                "val/loss": val_loss,
                 **{f"train/{k.split('/')[1]}": v for k, v in train_losses.items()},
+                **{f"val/{k.split('/')[1]}": v for k, v in val_losses.items()},
             })
 
         # Checkpoint state
@@ -257,7 +268,19 @@ def main(cfg: DictConfig) -> None:
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            epochs_no_improve = 0
             _save_checkpoint(state, ckpt_dir / "best.pt")
+        else:
+            epochs_no_improve += 1
+
+        # Early stopping: halt if val loss has not improved for `patience` epochs
+        if patience and epochs_no_improve >= patience:
+            log.info(
+                f"Early stopping at epoch {epoch}: "
+                f"val loss did not improve for {patience} epochs "
+                f"(best={best_val_loss:.4f})"
+            )
+            break
 
     if use_wandb:
         _wandb.finish()

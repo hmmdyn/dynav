@@ -60,6 +60,23 @@ class TestWaypointLoss:
         loss = compute_waypoint_loss(pred, gt)
         assert 0 < loss.item() <= 2.0 + 1e-6
 
+    def test_l2_is_mse(self) -> None:
+        pred = torch.ones(B, H, 2)
+        gt   = -torch.ones(B, H, 2)
+        # squared error per element is (2)^2 = 4
+        loss = compute_waypoint_loss(pred, gt, loss_type="l2")
+        assert abs(loss.item() - 4.0) < 1e-6
+
+    def test_l2_zero_when_equal(self) -> None:
+        gt = torch.randn(B, H, 2)
+        assert compute_waypoint_loss(gt, gt, loss_type="l2").item() < 1e-6
+
+    def test_unknown_type_raises(self) -> None:
+        pred = torch.randn(B, H, 2)
+        gt   = torch.randn(B, H, 2)
+        with pytest.raises(ValueError):
+            compute_waypoint_loss(pred, gt, loss_type="huber")
+
 
 # ── compute_direction_loss ─────────────────────────────────────────────────────
 

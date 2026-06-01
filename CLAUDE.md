@@ -106,13 +106,21 @@ env var으로 오버라이드 가능: `DYNAV_FRODO_ROOT`, `DYNAV_DATASET_ROOT`, 
 ```
 L_total = L_waypoint + λ1·L_direction + λ2·L_progress + λ3·L_smooth
 
-L_waypoint  = (1/H) Σ ||â_i - a*_i||₁           # L1 regression
+L_waypoint  = (1/H) Σ ||â_i - a*_i||_p           # p=1(L1/MAE) or p=2(L2/MSE), config 선택
 L_direction = 1 - cos(α̂, α*_route)               # route alignment
 L_progress  = -(1/H) Σ (â_i · d̂_route)           # progress incentive
 L_smooth    = (1/(H-1)) Σ ||â_{i+1} - â_i||²     # smoothness
 ```
 
-λ1·λ2·λ3 및 enable 플래그의 값은 **`configs/default.yaml`의 `loss.*`가 권위** (`lambda_direction`/`lambda_progress`/`lambda_smooth`, `enable_direction`/`progress`/`smooth`). 이 문서는 수식 형태만 고정하고 수치는 config를 따른다.
+waypoint loss 종류(`loss.waypoint_type`: `"l1"`/`"l2"`), λ1·λ2·λ3, enable 플래그 값은 모두 **`configs/default.yaml`의 `loss.*`가 권위** (`waypoint_type`, `lambda_direction`/`lambda_progress`/`lambda_smooth`, `enable_direction`/`progress`/`smooth`). 이 문서는 수식 형태만 고정하고 수치·선택은 config를 따른다.
+
+## Training Loop (`scripts/train.py`)
+
+- **Optimizer/scheduler:** AdamW + linear warm-up → cosine decay. `lr`·`weight_decay`·`warmup_epochs`는 `configs/default.yaml`의 `training.*`가 권위.
+- **Encoder freeze:** 첫 `encoder.freeze_epochs` 동안 backbone freeze 후 unfreeze.
+- **Validation:** `_eval_one_epoch`이 component별 평균 loss dict 반환 → WandB에 `val/{waypoint,direction,progress,smooth,total}` 기록 (train과 대칭).
+- **Early stopping:** val total loss가 `training.early_stopping_patience` epoch 동안 개선되지 않으면 중단 (`0`이면 비활성). best는 `checkpoints/best.pt`.
+- **AMP:** `training.amp` + CUDA일 때 BF16 autocast.
 
 ---
 

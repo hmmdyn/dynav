@@ -16,20 +16,27 @@ from omegaconf import DictConfig
 def compute_waypoint_loss(
     pred_waypoints: torch.Tensor,
     gt_waypoints: torch.Tensor,
+    loss_type: str = "l1",
 ) -> torch.Tensor:
-    """L1 regression loss between predicted and ground-truth waypoints.
+    """Regression loss between predicted and ground-truth waypoints.
 
-    L_waypoint = (1/H) * Σ_i ||â_i - a*_i||₁
+    L_waypoint = (1/H) * Σ_i ||â_i - a*_i||₁   (loss_type="l1")
+               = (1/H) * Σ_i ||â_i - a*_i||²   (loss_type="l2", MSE)
 
     Args:
         pred_waypoints: Predicted waypoints of shape (B, H, 2).
         gt_waypoints: Ground-truth waypoints of shape (B, H, 2).
+        loss_type: ``"l1"`` (MAE) or ``"l2"`` (MSE).
 
     Returns:
         Scalar loss tensor.
     """
     # (B, H, 2) → mean over H and (x,y)
-    return torch.abs(pred_waypoints - gt_waypoints).mean()
+    if loss_type == "l1":
+        return torch.abs(pred_waypoints - gt_waypoints).mean()
+    if loss_type == "l2":
+        return ((pred_waypoints - gt_waypoints) ** 2).mean()
+    raise ValueError(f"Unknown waypoint loss_type: '{loss_type}' (expected 'l1' or 'l2')")
 
 
 def compute_direction_loss(
@@ -144,6 +151,7 @@ class NavigationLoss(nn.Module):
         self.lambda_direction: float = cfg.loss.lambda_direction
         self.lambda_progress: float  = cfg.loss.lambda_progress
         self.lambda_smooth: float    = cfg.loss.lambda_smooth
+        self.waypoint_type: str      = cfg.loss.get("waypoint_type", "l1")
         self.enable_direction: bool  = cfg.loss.get("enable_direction", True)
         self.enable_progress: bool   = cfg.loss.get("enable_progress", True)
         self.enable_smooth: bool     = cfg.loss.get("enable_smooth", True)
@@ -168,7 +176,7 @@ class NavigationLoss(nn.Module):
                   ``"loss/waypoint"``, ``"loss/direction"``,
                   ``"loss/progress"``, ``"loss/smooth"`` for wandb logging.
         """
-        l_waypoint = compute_waypoint_loss(pred_waypoints, gt_waypoints)
+        l_waypoint = compute_waypoint_loss(pred_waypoints, gt_waypoints, self.waypoint_type)
 
         zero = torch.tensor(0.0, device=pred_waypoints.device)
 

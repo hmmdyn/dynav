@@ -13,28 +13,30 @@ decoder:
   n_layers: 4
   n_heads: 4
   d_ff: 512
-  dropout: 0.1
+  dropout: 0.2
 
 action_head:
   type: "regression"                # "regression" or "diffusion" (future)
   hidden_dim: 128
 
 loss:
+  waypoint_type: "l2"               # "l1" (MAE) or "l2" (MSE)
   enable_direction: true
-  enable_progress: true
+  enable_progress: false
   enable_smooth: true
-  lambda_direction: 0.5
+  lambda_direction: 0.1
   lambda_progress: 0.1
-  lambda_smooth: 0.01
+  lambda_smooth: 0.05
 
 training:
   batch_size: 32
   learning_rate: 1e-4
-  weight_decay: 1e-4
+  weight_decay: 1e-3
   optimizer: "adamw"
   epochs: 100
   scheduler: "cosine"
   warmup_epochs: 5
+  early_stopping_patience: 7        # stop if val loss does not improve for N epochs (0 = disabled)
   save_every: 10                    # save checkpoint every N epochs
   num_workers: 4                    # DataLoader worker processes
   use_wandb: false                  # enable wandb logging
