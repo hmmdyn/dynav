@@ -31,8 +31,8 @@ Two planned models:
 - **CrossAttentionDecoder** (ablation): Self-Attn(obs) → Cross-Attn(Q=obs, K/V=map) → FFN × 4. Output: mean pool → `context ∈ (B, 256)`.
 
 ### Action Head
-`WaypointHead`: Linear(256, 128) → ReLU → Linear(128, H×2) → reshape `(H, 2)`.  
-Output: H=5 relative waypoints (Δx, Δy) in robot body frame, normalized to [-1, 1].
+`WaypointHead`: Linear(256, 128) → ReLU → Linear(128, H×2) → tanh → reshape `(H, 2)`.  
+Output: H=5 relative waypoints (Δx, Δy) in robot body frame, bounded to [-1, 1] via tanh.
 
 ---
 
