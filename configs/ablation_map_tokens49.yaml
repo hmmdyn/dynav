@@ -1,0 +1,11 @@
+# @package _global_
+# Map token-count ablation — full 7×7 feature grid (49 tokens + 2D pos enc).
+# Upper end of the 1 / 9 / 49 token sweep (see ablation_map_tokens9.yaml).
+# Usage: python scripts/train.py --config-name ablation_map_tokens49
+
+defaults:
+  - default
+  - _self_
+
+encoder:
+  map_tokens: 49

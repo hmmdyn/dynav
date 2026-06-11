@@ -76,6 +76,7 @@ class DyNavModel(nn.Module):
         self.map_encoder = MapEncoder(
             token_dim=token_dim,
             pretrained=pretrained,
+            n_tokens=cfg.encoder.get("map_tokens", 1),
         )
 
         # ── Decoder (selected by config) ───────────────────────────────────────
@@ -95,6 +96,7 @@ class DyNavModel(nn.Module):
                 n_heads=d_dec.n_heads,
                 d_ff=d_dec.d_ff,
                 dropout=d_dec.dropout,
+                readout=d_dec.get("readout", "obs_mean"),
             )
         else:
             raise ValueError(

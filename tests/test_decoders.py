@@ -170,6 +170,27 @@ class TestSelfAttentionDecoder:
             # rows are softmax distributions
             assert torch.allclose(w.sum(dim=-1), torch.ones(BATCH, n_total), atol=1e-5)
 
+    def test_readout_token_context_shape(
+        self,
+        obs_tokens: torch.Tensor,
+        map_tokens: torch.Tensor,
+    ) -> None:
+        """readout='token' produces the same (B, d) context interface."""
+        dec = SelfAttentionDecoder(
+            token_dim=TOKEN_DIM, n_obs=N_OBS, n_layers=N_LAYERS,
+            n_heads=N_HEADS, d_ff=D_FF, readout="token",
+        ).eval()
+        with torch.no_grad():
+            ctx, attn = dec(obs_tokens, map_tokens, return_attention=True)
+        assert ctx.shape == (BATCH, TOKEN_DIM)
+        # readout token prepended → sequence length grows by 1
+        n_total = 1 + obs_tokens.shape[1] + map_tokens.shape[1]
+        assert attn[0].shape == (BATCH, n_total, n_total)
+
+    def test_invalid_readout_raises(self) -> None:
+        with pytest.raises(ValueError):
+            SelfAttentionDecoder(token_dim=TOKEN_DIM, n_obs=N_OBS, readout="cls")
+
     def test_attention_per_head_shape(
         self,
         self_decoder: SelfAttentionDecoder,

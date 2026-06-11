@@ -23,16 +23,16 @@ Two planned models:
 
 ### Encoders
 - **VisualEncoder:** Each obs image → EfficientNet-B0 → GAP → Linear(1280, 256) → 1 token. 4 images → `obs_tokens ∈ (B, 4, 256)`.
-- **MapEncoder:** Map image → EfficientNet-B0 → GlobalAvgPool → Linear(1280, 256) → 1 token → `map_tokens ∈ (B, 1, 256)`.
-  - Single-token GAP is noise-robust: GPS, heading, and path centerline errors all cause horizontal displacement in heading-up maps — GAP is invariant to such shifts.
+- **MapEncoder:** Map image → EfficientNet-B0 → AdaptiveAvgPool(g×g) → Linear(1280, 256) → `map_tokens ∈ (B, n, 256)`. `encoder.map_tokens`: 1 (GAP, default) | 9 (3×3) | 49 (7×7); n>1이면 learnable 2D pos-enc 추가.
+  - Single-token GAP is noise-robust: GPS, heading, and path centerline errors all cause horizontal displacement in heading-up maps — GAP is invariant to such shifts. (token 수 ablation: `ablation_map_tokens9/49.yaml`)
 
 ### Modality dropout / baseline flags (`DyNavModel._apply_modality_dropout`)
 - 학습 중 확률 p로 map(또는 obs) 토큰 전체를 **learned null token**으로 교체 — `model.map_dropout_p` / `model.obs_dropout_p` (0 = off).
 - `model.disable_map` / `model.disable_obs`: train·eval 모두 항상 null token 사용 → obs-only / map-only 베이스라인 (`baseline_obs_only.yaml` / `baseline_map_only.yaml`).
 
 ### Decoder
-- **SelfAttentionDecoder** (default): Cat(obs[4], map[1]) → Self-Attn → FFN × 4 (pre-norm, custom layer — `nn.TransformerEncoderLayer`와 모듈명 동일해 구 체크포인트 호환). 5-token sequence. Output: mean pool over obs positions → `context ∈ (B, 256)`.
-  - `return_attention=True` → layer별 head-평균 full attention `(B, 5, 5)` 리스트 / `return_per_head=True` → `(B, n_heads, 5, 5)`.
+- **SelfAttentionDecoder** (default): Cat(obs[4], map[n]) → Self-Attn → FFN × 4 (pre-norm, custom layer — `nn.TransformerEncoderLayer`와 모듈명 동일해 구 체크포인트 호환). Output(`decoder.readout`): `"obs_mean"`(default) = obs 위치 mean pool / `"token"` = 선두에 learnable [READOUT] 토큰 prepend 후 그 출력 → `context ∈ (B, 256)`.
+  - `return_attention=True` → layer별 head-평균 full attention `(B, N, N)` 리스트 / `return_per_head=True` → `(B, n_heads, N, N)`. (N = [readout?]+obs+map)
 - **CrossAttentionDecoder** (ablation): Self-Attn(obs) → Cross-Attn(Q=obs, K/V=map) → FFN × 4. Output: mean pool → `context ∈ (B, 256)`.
 
 ### Action Head
@@ -123,7 +123,7 @@ waypoint loss 종류(`loss.waypoint_type`: `"l1"`/`"l2"`/`"huber"`), `huber_delt
 
 - **Optimizer/scheduler:** AdamW + linear warm-up → cosine decay. `lr`·`weight_decay`·`warmup_epochs`·`grad_clip_norm`은 `configs/default.yaml`의 `training.*`가 권위.
 - **Encoder freeze:** 첫 `encoder.freeze_epochs` 동안 backbone freeze 후 unfreeze.
-- **Metrics:** 정규화 val loss 외에 **ADE/FDE 미터 단위** (`dynav/utils/metrics.py`, meta의 `waypoint_norm_m`로 역정규화 — 구버전 meta는 `data.max_waypoint_distance` 폴백) + **maneuver별 stratified val** (`val/ade_m/{maneuver}`, frodo7k meta `labels.maneuver` 사용; 라벨 없는 데이터셋은 자동 생략).
+- **Metrics:** 정규화 val loss 외에 **ADE/FDE 미터 단위** (`dynav/utils/metrics.py`, meta의 `waypoint_norm_m`로 역정규화 — 구버전 meta는 `data.max_waypoint_distance` 폴백) + **maneuver별 stratified val** (`val/ade_m/{maneuver}`, frodo7k meta `labels.maneuver` 사용; 라벨 없는 데이터셋은 자동 생략) + **per-horizon DE** (`val/de_m_h1..h5` — waypoint 인덱스별 오차 성장 프로파일).
 - **Validation:** `_eval_one_epoch`이 component별 평균 loss + ADE/FDE dict 반환 → WandB `val/*` 기록 (train과 대칭, train은 grad_norm·samples_per_sec 추가).
 - **Early stopping:** val total loss가 `training.early_stopping_patience` epoch 동안 개선되지 않으면 중단 (`0`이면 비활성). best는 `checkpoints/best.pt`.
 - **AMP:** `training.amp` + CUDA일 때 BF16 autocast.
@@ -322,6 +322,9 @@ rides0~4 기반 후처리 스크립트 수동 구동으로 필터링 → train 4
 | `baseline_map_only.yaml` | `disable_obs: true` — 카메라 기여 검증 (map-shortcut 진단) |
 | `baseline_obs_only.yaml` | `disable_map: true` — 지도 기여 정량화 |
 | `ablation_aux_losses.yaml` | direction+smooth 활성 (구 기본값 복원) |
+| `ablation_map_tokens9.yaml` | `encoder.map_tokens: 9` — GAP invariance 검증 (3×3) |
+| `ablation_map_tokens49.yaml` | `encoder.map_tokens: 49` — 7×7 full grid |
+| `ablation_readout_token.yaml` | `decoder.readout: "token"` — obs_mean 제약의 bias 검증 |
 | `ablation_map_hybrid.yaml` | `map.mode: "hybrid"` — 현재 미사용, 후속 연구용으로 보류 |
 | `ablation_no_direction.yaml` | `enable_direction: false` (default가 waypoint-only가 되면서 무의미 — 보존만) |
 | `ablation_no_progress.yaml` | `enable_progress: false` (동상) |

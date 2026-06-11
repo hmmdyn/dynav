@@ -123,13 +123,14 @@ def visualize(
         )
         sys.exit(1)
 
-    # SelfAttentionDecoder returns full (N, N) matrices over [obs; map] —
-    # slice the obs→map block to match the cross-attention heatmap layout.
+    # SelfAttentionDecoder returns full (N, N) matrices over [readout?; obs; map]
+    # — slice the obs→map block to match the cross-attention heatmap layout.
     if cfg.decoder.type == "self_attention":
+        off = 1 if cfg.decoder.get("readout", "obs_mean") == "token" else 0
         if per_head:
-            attn_list = [w[:, :, :n_obs, n_obs:] for w in attn_list]
+            attn_list = [w[:, :, off:off + n_obs, off + n_obs:] for w in attn_list]
         else:
-            attn_list = [w[:, :n_obs, n_obs:] for w in attn_list]
+            attn_list = [w[:, off:off + n_obs, off + n_obs:] for w in attn_list]
 
     n_layers = len(attn_list)
     obs_labels = ["front (t)", "front (t-1)", "front (t-2)", "front (t-3)"]

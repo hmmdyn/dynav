@@ -106,6 +106,13 @@ class SelfAttentionDecoder(nn.Module):
         n_heads: Number of attention heads per layer.
         d_ff: FFN hidden dimension inside each Transformer layer.
         dropout: Dropout probability.
+        readout: How to produce the context vector —
+            ``"obs_mean"`` (default): mean-pool the obs positions. Structural
+            constraint: map information reaches the output only through obs
+            tokens ("act on what you see, modulated by the map").
+            ``"token"``: prepend a learnable [READOUT] token and use its
+            output. No modality constraint — the readout attends to obs and
+            map directly (ablation for the constraint above).
 
     Example:
         >>> dec = SelfAttentionDecoder(token_dim=256, n_obs=4, n_layers=4, n_heads=4, d_ff=512)
@@ -124,10 +131,17 @@ class SelfAttentionDecoder(nn.Module):
         n_heads: int = 4,
         d_ff: int = 512,
         dropout: float = 0.1,
+        readout: str = "obs_mean",
     ) -> None:
         super().__init__()
 
+        if readout not in ("obs_mean", "token"):
+            raise ValueError(f"Unknown readout: '{readout}' (expected 'obs_mean' or 'token')")
+
         self.n_obs = n_obs
+        self.readout = readout
+        if readout == "token":
+            self.readout_token = nn.Parameter(torch.randn(1, 1, token_dim) * 0.02)
 
         # ── Learnable token-type embeddings ────────────────────────────────────
         # Shape: (1, 1, d) each — broadcast over batch and sequence length.
@@ -173,8 +187,12 @@ class SelfAttentionDecoder(nn.Module):
         obs = obs_tokens + self.obs_type_embed   # (B, N_o, d)
         mp  = map_tokens + self.map_type_embed   # (B, N_m, d)
 
-        # Concatenate along sequence dimension
-        tokens = torch.cat([obs, mp], dim=1)     # (B, N_o + N_m, d)
+        # Concatenate along sequence dimension; readout token (if any) first
+        parts = [obs, mp]
+        if self.readout == "token":
+            B = obs.shape[0]
+            parts.insert(0, self.readout_token.expand(B, 1, -1))
+        tokens = torch.cat(parts, dim=1)         # (B, [1+] N_o + N_m, d)
 
         need_weights = return_attention or return_per_head
         attn_list: list[torch.Tensor] = []
@@ -187,8 +205,9 @@ class SelfAttentionDecoder(nn.Module):
             if need_weights:
                 attn_list.append(attn_w)
 
-        # Extract obs positions only (first N_o tokens)
-        obs_out = tokens[:, : self.n_obs, :]      # (B, N_o, d)
-
-        context = obs_out.mean(dim=1)             # (B, d)
+        if self.readout == "token":
+            context = tokens[:, 0, :]                       # (B, d)
+        else:
+            obs_out = tokens[:, : self.n_obs, :]            # (B, N_o, d)
+            context = obs_out.mean(dim=1)                   # (B, d)
         return context, (attn_list if need_weights else None)

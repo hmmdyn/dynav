@@ -18,6 +18,7 @@ encoder:
   backbone: "efficientnet_b0"
   pretrained: true
   freeze_epochs: 5                  # freeze encoder for first N epochs
+  map_tokens: 1                     # 1 (GAP, 05-19 결정) | 9 (3×3) | 49 (7×7) — token-count ablation
 
 decoder:
   type: "self_attention"            # "cross_attention" or "self_attention"
@@ -25,6 +26,7 @@ decoder:
   n_heads: 4
   d_ff: 512
   dropout: 0.2
+  readout: "obs_mean"               # "obs_mean" (map은 obs를 거쳐야 출력 도달) | "token" ([READOUT] ablation)
 
 action_head:
   type: "regression"                # "regression" or "diffusion" (future)

@@ -1,0 +1,14 @@
+# @package _global_
+# Map token-count ablation — 3×3 spatial grid (9 tokens + 2D pos enc).
+# Tests whether GAP's shift invariance erases useful spatial signal
+# (robot-to-route offset, distance-to-turn). Report together with a GPS-noise
+# robustness curve: invariance should pay off under injected noise if the
+# 05-19 GAP rationale holds.
+# Usage: python scripts/train.py --config-name ablation_map_tokens9
+
+defaults:
+  - default
+  - _self_
+
+encoder:
+  map_tokens: 9

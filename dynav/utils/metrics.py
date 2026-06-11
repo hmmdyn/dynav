@@ -32,6 +32,33 @@ def compute_ade_fde(
     return ade, fde
 
 
+@torch.no_grad()
+def compute_per_horizon_de(
+    pred_waypoints: torch.Tensor,
+    gt_waypoints: torch.Tensor,
+    waypoint_norm_m: torch.Tensor,
+) -> torch.Tensor:
+    """Per-waypoint-index displacement error in meters.
+
+    Separates error growth along the prediction horizon: with absolute (non
+    cumulative) waypoint regression, later waypoints have larger GT
+    displacement and typically larger error — a flat profile vs a steep one
+    distinguishes "uniformly noisy" from "long-horizon uncertainty".
+
+    Args:
+        pred_waypoints: Predicted waypoints (B, H, 2), normalized [-1, 1].
+        gt_waypoints: Ground-truth waypoints (B, H, 2), normalized [-1, 1].
+        waypoint_norm_m: Normalization radius in meters, shape (B,) or scalar.
+
+    Returns:
+        Displacement errors of shape (B, H), meters.
+    """
+    dist = (pred_waypoints - gt_waypoints).norm(dim=-1)   # (B, H)
+    if waypoint_norm_m.dim() > 0:
+        return dist * waypoint_norm_m[:, None]
+    return dist * waypoint_norm_m
+
+
 class StratifiedMeter:
     """Accumulates per-sample metric values grouped by a string label.
 

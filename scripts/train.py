@@ -21,7 +21,7 @@ import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
-from dynav.utils.metrics import StratifiedMeter, compute_ade_fde
+from dynav.utils.metrics import StratifiedMeter, compute_ade_fde, compute_per_horizon_de
 
 log = logging.getLogger(__name__)
 
@@ -220,6 +220,8 @@ def _eval_one_epoch(
     running: dict[str, float] = {}
     ade_meter = StratifiedMeter()
     fde_meter = StratifiedMeter()
+    horizon_sum: torch.Tensor | None = None   # (H,) accumulated DE per index
+    n_samples = 0
 
     for batch in loader:
         obs  = batch["observations"].to(device)
@@ -237,8 +239,16 @@ def _eval_one_epoch(
         ade_meter.update(ade.cpu(), batch["maneuver"])
         fde_meter.update(fde.cpu(), batch["maneuver"])
 
+        de = compute_per_horizon_de(out["waypoints"].float(), gt, norm_m)  # (B, H)
+        horizon_sum = de.sum(dim=0) if horizon_sum is None else horizon_sum + de.sum(dim=0)
+        n_samples += de.shape[0]
+
     n = max(len(loader), 1)
     result = {k: v / n for k, v in running.items()}
+
+    if horizon_sum is not None and n_samples:
+        for i, v in enumerate((horizon_sum / n_samples).tolist()):
+            result[f"de_m_h{i + 1}"] = v   # error growth along the horizon
 
     ade_means, fde_means = ade_meter.means(), fde_meter.means()
     result["ade_m"] = ade_means.pop("all", float("nan"))

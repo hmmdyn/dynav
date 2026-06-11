@@ -1,0 +1,13 @@
+# @package _global_
+# Readout ablation — learnable [READOUT] token instead of obs mean-pool.
+# obs_mean imposes "map information reaches the output only through obs
+# tokens"; the readout token removes that constraint. If obs_mean is not
+# better, the constraint is not a useful inductive bias.
+# Usage: python scripts/train.py --config-name ablation_readout_token
+
+defaults:
+  - default
+  - _self_
+
+decoder:
+  readout: "token"

@@ -88,10 +88,24 @@ class TestMapEncoder:
         assert map_encoder.n_tokens == 1
 
     def test_no_pos_enc(self, map_encoder: MapEncoder) -> None:
-        """MapEncoder must not have a positional encoding parameter or buffer."""
+        """Default (GAP) MapEncoder must not have a positional encoding param."""
         param_names = {name for name, _ in map_encoder.named_parameters()}
-        assert "pos_enc_2d" not in param_names
-        assert not hasattr(map_encoder, "pos_enc_2d")
+        assert "pos_enc" not in param_names
+        assert map_encoder.pos_enc is None
+
+    @pytest.mark.parametrize("n_tokens", [9, 49])
+    def test_spatial_tokens_shape_and_pos_enc(self, n_tokens: int) -> None:
+        """Spatial variants output (B, n_tokens, d) and carry a 2D pos enc."""
+        enc = MapEncoder(token_dim=256, pretrained=False, n_tokens=n_tokens)
+        x = torch.randn(2, 3, 224, 224)
+        with torch.no_grad():
+            tokens = enc(x)
+        assert tokens.shape == (2, n_tokens, 256)
+        assert enc.pos_enc is not None and enc.pos_enc.shape == (1, n_tokens, 256)
+
+    def test_invalid_n_tokens_raises(self) -> None:
+        with pytest.raises(ValueError):
+            MapEncoder(token_dim=256, pretrained=False, n_tokens=4)
 
     def test_pretrained_weights_loaded(self, map_encoder: MapEncoder) -> None:
         """Pretrained backbone must have non-zero weights (not default init)."""
