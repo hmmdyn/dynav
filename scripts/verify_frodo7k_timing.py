@@ -53,6 +53,11 @@ def main() -> None:
                     help="dataset split(s) to check (default: val)")
     ap.add_argument("--limit", type=int, default=None,
                     help="max samples per split (default: all)")
+    ap.add_argument("--frodo7k-root", default=None,
+                    help="override paths.frodo7k_root (zarr location; "
+                         "config paths are machine-specific)")
+    ap.add_argument("--output-root", default=None,
+                    help="override paths.output_root (built dataset location)")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(Path(args.config).read_text())
@@ -60,9 +65,13 @@ def main() -> None:
     wp_offsets = list(scfg["wp_offsets"])
     obs_stride = int(scfg["obs_stride"])
     n_obs = int(scfg["n_obs"])
-    out_root = Path(cfg["paths"]["output_root"])
+    out_root = Path(args.output_root or cfg["paths"]["output_root"])
+    frodo7k_root = Path(args.frodo7k_root or cfg["paths"]["frodo7k_root"])
+    if not (frodo7k_root / "dataset_cache.zarr").exists():
+        sys.exit(f"zarr not found at {frodo7k_root} — pass --frodo7k-root "
+                 "(config paths are machine-specific)")
 
-    reader = Frodo7kReader(cfg["paths"]["frodo7k_root"],
+    reader = Frodo7kReader(frodo7k_root,
                            bounds_cache=out_root / "ep_bounds.npy")
 
     splits = args.split or ["val"]
