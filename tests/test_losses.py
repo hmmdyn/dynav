@@ -71,6 +71,26 @@ class TestWaypointLoss:
         gt = torch.randn(B, H, 2)
         assert compute_waypoint_loss(gt, gt, loss_type="l2").item() < 1e-6
 
+    def test_huber_zero_when_equal(self) -> None:
+        wp = torch.rand(B, H, 2)
+        assert compute_waypoint_loss(wp, wp, "huber").item() == pytest.approx(0.0)
+
+    def test_huber_matches_l2_for_small_errors(self) -> None:
+        """Below δ, huber = 0.5·L2 (same curvature, halved constant)."""
+        gt = torch.zeros(B, H, 2)
+        pred = torch.full((B, H, 2), 0.1)   # |e| = 0.1 < δ = 0.3
+        huber = compute_waypoint_loss(pred, gt, "huber", huber_delta=0.3)
+        l2 = compute_waypoint_loss(pred, gt, "l2")
+        assert huber.item() == pytest.approx(0.5 * l2.item(), rel=1e-5)
+
+    def test_huber_bounded_gradient_for_large_errors(self) -> None:
+        """Beyond δ, huber is linear → smaller than L2 on outliers."""
+        gt = torch.zeros(B, H, 2)
+        pred = torch.full((B, H, 2), 2.0)   # |e| = 2.0 >> δ
+        huber = compute_waypoint_loss(pred, gt, "huber", huber_delta=0.3)
+        l2 = compute_waypoint_loss(pred, gt, "l2")
+        assert huber.item() < l2.item()
+
     def test_unknown_type_raises(self) -> None:
         pred = torch.randn(B, H, 2)
         gt   = torch.randn(B, H, 2)

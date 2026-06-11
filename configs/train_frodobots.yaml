@@ -1,22 +1,29 @@
 # @package _global_
-# RTX 5090 training config — FrodoBots 31K dataset
-# Usage: python scripts/train.py --config-name train_frodobots data.data_dir=/path/to/dataset
+# RTX 5090 main training config — FrodoBots-7k dataset (train 31,075 / val 3,026)
+# Usage: python scripts/train.py --config-name train_frodobots \
+#            data.data_dir=/path/to/frodo7k_output   # {train,val} 포함 디렉토리
 
 defaults:
   - default
   - _self_
 
+model:
+  map_dropout_p: 0.25               # map-shortcut 방지 — sweep {0.1, 0.25, 0.5}
+
 training:
-  batch_size: 128
-  learning_rate: 2e-4
-  weight_decay: 1e-4
+  batch_size: 128                   # ~243 steps/epoch @ 31k samples, 32GB VRAM 여유
+  learning_rate: 2e-4               # AdamW + batch 128 기준
+  weight_decay: 1e-3                # 05-22 overfit 대응 결정 유지 (11M params vs 31k samples)
   optimizer: "adamw"
-  epochs: 50
-  warmup_epochs: 5
+  epochs: 50                        # ~12k steps; early stopping이 실효 길이 결정
+  warmup_epochs: 5                  # = encoder.freeze_epochs — unfreeze와 warm-up 종료 일치
   scheduler: "cosine"
+  early_stopping_patience: 10       # cosine 후반 개선 여지 고려해 default(7)보다 완화
   save_every: 5
   num_workers: 12
   use_wandb: true
   wandb_project: "dynav"
-  wandb_entity: "YOUR_WANDB_ENTITY"    # wandb username or team name
+  wandb_entity: null                # null → wandb default entity
+  wandb_tags: ["frodo7k", "main"]
+  viz_every: 5                      # 궤적 figure 로깅 주기
   amp: true                         # BF16 autocast — Blackwell architecture

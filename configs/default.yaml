@@ -3,6 +3,17 @@ model:
   obs_context_length: 3             # K — number of past front frames (total obs = K+1)
   prediction_horizon: 5             # H — number of waypoints to predict
 
+  # Modality dropout (training-time, per sample) — NoMaD goal-masking analogue.
+  # Replaces the modality's tokens with a learned null token: prevents
+  # map-shortcut degeneration + defined behavior on GPS outage. 0 = off.
+  map_dropout_p: 0.0
+  obs_dropout_p: 0.0
+
+  # Baseline ablations — always use the null token (train AND eval).
+  # disable_obs → map-only baseline / disable_map → obs-only baseline.
+  disable_map: false
+  disable_obs: false
+
 encoder:
   backbone: "efficientnet_b0"
   pretrained: true
@@ -20,10 +31,14 @@ action_head:
   hidden_dim: 128
 
 loss:
-  waypoint_type: "l2"               # "l1" (MAE) or "l2" (MSE)
-  enable_direction: true
+  waypoint_type: "l2"               # "l1" (MAE), "l2" (MSE), or "huber"
+  huber_delta: 0.3                  # huber transition point (normalized space)
+  # Waypoint-only by default (2026-05-26 결정) — auxiliary losses are ablations.
+  # direction: dest-bearing GT conflicts with waypoint GT at corners (old builds);
+  # smooth: equal-step straight-line prior double-counts the straight bias.
+  enable_direction: false
   enable_progress: false
-  enable_smooth: true
+  enable_smooth: false
   lambda_direction: 0.1
   lambda_progress: 0.1
   lambda_smooth: 0.05
@@ -36,10 +51,16 @@ training:
   epochs: 100
   scheduler: "cosine"
   warmup_epochs: 5
+  grad_clip_norm: 1.0               # global gradient norm clip
   early_stopping_patience: 7        # stop if val loss does not improve for N epochs (0 = disabled)
   save_every: 10                    # save checkpoint every N epochs
   num_workers: 4                    # DataLoader worker processes
   use_wandb: false                  # enable wandb logging
+  wandb_project: "dynav"
+  wandb_entity: null                # wandb username or team name
+  wandb_run_name: null              # null → auto: "{decoder}-{loss}[-mapdropP|-maponly|-obsonly]"
+  wandb_tags: []                    # e.g. ["frodo7k", "baseline"]
+  viz_every: 5                      # log pred-vs-GT trajectory figure every N epochs (0 = off)
   amp: false                        # BF16 autocast (recommended for CUDA, no GradScaler needed)
 
 data:
@@ -47,7 +68,8 @@ data:
   image_size: 224
   map_image_size: 224
   normalize_waypoints: true
-  max_waypoint_distance: 2.5        # meters, for normalization
+  max_waypoint_distance: 2.5        # meters, fallback norm radius for pre-frodo7k meta
+                                    # (frodo7k samples carry waypoint_norm_m: 5.0 in meta)
 
   # Map image normalisation — must match the mode used during dataset building.
   # rgb mode:    use ImageNet statistics (EfficientNet-B0 pretrained compatible)

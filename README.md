@@ -60,7 +60,7 @@
 ## 설치
 
 ```bash
-pip install torch torchvision einops hydra-core omegaconf wandb
+pip install torch torchvision einops hydra-core omegaconf wandb matplotlib
 pip install requests pillow rosbags opencv-python tqdm
 ```
 

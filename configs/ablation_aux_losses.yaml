@@ -1,0 +1,13 @@
+# @package _global_
+# Auxiliary-loss ablation — direction + smooth enabled (pre-06-11 behavior).
+# Default config is waypoint-only (2026-05-26 decision); this config restores
+# the auxiliary terms to measure their effect.
+# Usage: python scripts/train.py --config-name ablation_aux_losses
+
+defaults:
+  - default
+  - _self_
+
+loss:
+  enable_direction: true
+  enable_smooth: true

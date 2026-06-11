@@ -49,6 +49,21 @@ class DyNavModel(nn.Module):
         horizon: int = cfg.model.prediction_horizon
         pretrained: bool = cfg.encoder.pretrained
 
+        # ── Modality dropout / ablation flags ──────────────────────────────────
+        # map_dropout_p: during training, replace map tokens with a learned null
+        # token with probability p (per sample) — NoMaD goal-masking analogue.
+        # Prevents map-shortcut degeneration and gives defined behavior on GPS
+        # outage. obs_dropout_p is the symmetric diagnostic.
+        # disable_map / disable_obs: always use the null token (map-only /
+        # obs-only baselines) — set via baseline_*.yaml configs.
+        self.map_dropout_p: float = cfg.model.get("map_dropout_p", 0.0)
+        self.obs_dropout_p: float = cfg.model.get("obs_dropout_p", 0.0)
+        self.disable_map: bool = cfg.model.get("disable_map", False)
+        self.disable_obs: bool = cfg.model.get("disable_obs", False)
+
+        self.map_null_token = nn.Parameter(torch.zeros(1, 1, token_dim))
+        self.obs_null_token = nn.Parameter(torch.zeros(1, 1, token_dim))
+
         d_dec = cfg.decoder
         d_head = cfg.action_head
 
@@ -126,6 +141,8 @@ class DyNavModel(nn.Module):
         obs_tokens = self.visual_encoder(observations)    # (B, N_obs, d)
         map_tokens = self.map_encoder(map_image)          # (B, 1, d)
 
+        obs_tokens, map_tokens = self._apply_modality_dropout(obs_tokens, map_tokens)
+
         context, attn_weights = self.decoder(
             obs_tokens, map_tokens,
             return_attention=return_attention,
@@ -135,6 +152,45 @@ class DyNavModel(nn.Module):
         waypoints = self.waypoint_head(context)           # (B, H, 2)
 
         return {"waypoints": waypoints, "attention_weights": attn_weights}
+
+    # ── Modality dropout ───────────────────────────────────────────────────────
+
+    def _apply_modality_dropout(
+        self,
+        obs_tokens: torch.Tensor,
+        map_tokens: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Replace obs/map tokens with learned null tokens.
+
+        disable_* flags apply always (train and eval — ablation baselines);
+        *_dropout_p applies per sample during training only.
+
+        Args:
+            obs_tokens: (B, N_obs, d).
+            map_tokens: (B, N_m, d).
+
+        Returns:
+            Possibly-masked (obs_tokens, map_tokens), same shapes.
+        """
+        B = obs_tokens.shape[0]
+
+        if self.disable_map:
+            map_tokens = self.map_null_token.expand_as(map_tokens)
+        elif self.training and self.map_dropout_p > 0.0:
+            drop = torch.rand(B, 1, 1, device=map_tokens.device) < self.map_dropout_p
+            map_tokens = torch.where(
+                drop, self.map_null_token.expand_as(map_tokens), map_tokens
+            )
+
+        if self.disable_obs:
+            obs_tokens = self.obs_null_token.expand_as(obs_tokens)
+        elif self.training and self.obs_dropout_p > 0.0:
+            drop = torch.rand(B, 1, 1, device=obs_tokens.device) < self.obs_dropout_p
+            obs_tokens = torch.where(
+                drop, self.obs_null_token.expand_as(obs_tokens), obs_tokens
+            )
+
+        return obs_tokens, map_tokens
 
     # ── Encoder freeze helpers ─────────────────────────────────────────────────
 

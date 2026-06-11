@@ -75,12 +75,67 @@ class TestForwardShape:
             out = cross_model(obs, mp)
         assert out["attention_weights"] is None
 
-    def test_self_attention_weights_always_none(self, self_model: DyNavModel) -> None:
-        """SelfAttentionDecoder always returns None for attention_weights."""
+    def test_self_attention_weights_shape(self, self_model: DyNavModel) -> None:
+        """SelfAttentionDecoder returns per-layer (B, N, N) full attention."""
         obs, mp = _make_inputs()
         with torch.no_grad():
             out = self_model(obs, mp, return_attention=True)
-        assert out["attention_weights"] is None
+        attn = out["attention_weights"]
+        assert attn is not None and len(attn) == 4
+        for w in attn:
+            assert w.shape == (2, 5, 5)
+
+
+# ── Modality dropout / baseline flag tests ─────────────────────────────────────
+
+class TestModalityDropout:
+    """map/obs dropout and disable flags."""
+
+    def test_disable_map_ignores_map_input(self) -> None:
+        """With disable_map, two different map images give identical waypoints."""
+        cfg = _load_cfg()
+        cfg.model.disable_map = True
+        model = DyNavModel.from_config(cfg).eval()
+        obs, mp = _make_inputs()
+        with torch.no_grad():
+            w1 = model(obs, mp)["waypoints"]
+            w2 = model(obs, torch.randn_like(mp))["waypoints"]
+        assert torch.allclose(w1, w2)
+
+    def test_disable_obs_ignores_obs_input(self) -> None:
+        """With disable_obs, two different obs stacks give identical waypoints."""
+        cfg = _load_cfg()
+        cfg.model.disable_obs = True
+        model = DyNavModel.from_config(cfg).eval()
+        obs, mp = _make_inputs()
+        with torch.no_grad():
+            w1 = model(obs, mp)["waypoints"]
+            w2 = model(torch.randn_like(obs), mp)["waypoints"]
+        assert torch.allclose(w1, w2)
+
+    def test_map_dropout_inactive_in_eval(self) -> None:
+        """map_dropout_p must not mask the map outside training mode."""
+        cfg = _load_cfg()
+        cfg.model.map_dropout_p = 1.0
+        model = DyNavModel.from_config(cfg).eval()
+        obs, mp = _make_inputs()
+        with torch.no_grad():
+            w1 = model(obs, mp)["waypoints"]
+            w2 = model(obs, torch.randn_like(mp))["waypoints"]
+        assert not torch.allclose(w1, w2)
+
+    def test_map_dropout_p1_masks_all_in_train(self) -> None:
+        """map_dropout_p=1.0 in train mode → map input has no effect."""
+        cfg = _load_cfg()
+        cfg.model.map_dropout_p = 1.0
+        cfg.decoder.dropout = 0.0   # remove stochastic layers for determinism
+        model = DyNavModel.from_config(cfg).train()
+        obs, mp = _make_inputs()
+        torch.manual_seed(0)
+        w1 = model(obs, mp)["waypoints"]
+        torch.manual_seed(0)
+        w2 = model(obs, torch.randn_like(mp))["waypoints"]
+        assert torch.allclose(w1, w2)
 
 
 # ── Parameter count tests ──────────────────────────────────────────────────────

@@ -1,6 +1,8 @@
-"""Visualize cross-attention weights from a trained DyNavModel checkpoint.
+"""Visualize attention weights from a trained DyNavModel checkpoint.
 
-Only valid when the checkpoint was trained with decoder.type=cross_attention.
+Supports both decoder types: cross_attention uses the obs→map attention
+directly; self_attention slices the obs→map block out of the full (N, N)
+self-attention matrices.
 
 For each observation token, shows how strongly it attends to each map token
 across all decoder layers.
@@ -97,14 +99,7 @@ def visualize(
     import matplotlib.pyplot as plt
 
     model, cfg = _load_model_and_cfg(checkpoint, config)
-
-    if cfg.decoder.type != "cross_attention":
-        print(
-            f"[visualize_attention] Decoder type is '{cfg.decoder.type}'. "
-            "Attention visualization requires 'cross_attention' decoder.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    n_obs = cfg.model.obs_context_length + 1
 
     # ── Load a real sample from DyNavDataset ───────────────────────────────────
     from dynav.data.dataset import DyNavDataset
@@ -123,11 +118,18 @@ def visualize(
 
     if attn_list is None:
         print(
-            "[visualize_attention] No attention weights returned. "
-            "Ensure the model uses CrossAttentionDecoder.",
+            "[visualize_attention] No attention weights returned.",
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # SelfAttentionDecoder returns full (N, N) matrices over [obs; map] —
+    # slice the obs→map block to match the cross-attention heatmap layout.
+    if cfg.decoder.type == "self_attention":
+        if per_head:
+            attn_list = [w[:, :, :n_obs, n_obs:] for w in attn_list]
+        else:
+            attn_list = [w[:, :n_obs, n_obs:] for w in attn_list]
 
     n_layers = len(attn_list)
     obs_labels = ["front (t)", "front (t-1)", "front (t-2)", "front (t-3)"]

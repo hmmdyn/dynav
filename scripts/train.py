@@ -12,6 +12,7 @@ Hydra writes outputs (logs, checkpoints) to outputs/<date>/<time>/.
 
 import logging
 import math
+import time
 from pathlib import Path
 
 import hydra
@@ -19,6 +20,8 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
+
+from dynav.utils.metrics import StratifiedMeter, compute_ade_fde
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +76,71 @@ def _save_checkpoint(state: dict, path: Path) -> None:
     log.info(f"Checkpoint → {path}")
 
 
+def _flatten_metrics(prefix: str, metrics: dict[str, float]) -> dict[str, float]:
+    """Map epoch metric keys to wandb panel paths.
+
+    ``loss/waypoint`` → ``{prefix}/waypoint``; metric keys without the
+    ``loss/`` prefix (``ade_m``, ``grad_norm``, ``ade_m/turn`` …) pass through
+    as ``{prefix}/{key}``.
+    """
+    out = {}
+    for k, v in metrics.items():
+        key = k[len("loss/"):] if k.startswith("loss/") else k
+        out[f"{prefix}/{key}"] = v
+    return out
+
+
+@torch.no_grad()
+def _trajectory_figure(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    n_samples: int = 16,
+):
+    """Pred-vs-GT waypoint trajectories (body frame, meters) for the first
+    val batch — returns a matplotlib Figure, or None if matplotlib is missing.
+
+    Axes: vertical = x (forward), horizontal = -y (so robot-left renders left).
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+
+    model.eval()
+    batch = next(iter(loader))
+    obs = batch["observations"].to(device)
+    mp  = batch["map_image"].to(device)
+    out = model(obs, mp)
+
+    n = min(n_samples, obs.shape[0])
+    norm_m = batch["waypoint_norm_m"][:n, None, None]            # (n, 1, 1)
+    pred = out["waypoints"][:n].float().cpu() * norm_m            # (n, H, 2) m
+    gt   = batch["gt_waypoints"][:n] * norm_m                     # (n, H, 2) m
+    labels = batch["maneuver"][:n]
+
+    cols = 4
+    rows = (n + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(3 * cols, 3 * rows))
+    for i, ax in enumerate(axes.flat):
+        if i >= n:
+            ax.axis("off")
+            continue
+        for wps, color, lab in ((gt[i], "tab:green", "GT"), (pred[i], "tab:red", "pred")):
+            xs = torch.cat([torch.zeros(1), wps[:, 0]])
+            ys = torch.cat([torch.zeros(1), wps[:, 1]])
+            ax.plot(-ys, xs, "-o", color=color, markersize=3, label=lab)
+        ax.set_title(labels[i], fontsize=8)
+        ax.set_aspect("equal")
+        ax.grid(True, alpha=0.3)
+        if i == 0:
+            ax.legend(fontsize=7)
+    fig.tight_layout()
+    return fig
+
+
 def _train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -80,21 +148,29 @@ def _train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     use_amp: bool = False,
+    grad_clip_norm: float = 1.0,
 ) -> dict[str, float]:
     """Run one training epoch.
 
     Returns:
-        Dict of averaged loss components for the epoch (keys: ``loss/total``,
-        ``loss/waypoint``, ``loss/direction``, ``loss/progress``, ``loss/smooth``).
+        Dict of averaged loss components for the epoch (``loss/total``,
+        ``loss/waypoint``, ``loss/direction``, ``loss/progress``,
+        ``loss/smooth``) plus ``grad_norm`` (pre-clip, epoch mean),
+        ``ade_m``/``fde_m`` (meters), and ``samples_per_sec``.
     """
     model.train()
     running: dict[str, float] = {}
+    grad_norm_sum = 0.0
+    ade_sum = fde_sum = 0.0
+    n_samples = 0
+    t0 = time.perf_counter()
 
     for batch in loader:
         obs  = batch["observations"].to(device)    # (B, N_obs, 3, H, W)
         mp   = batch["map_image"].to(device)        # (B, 3, H, W)
         gt   = batch["gt_waypoints"].to(device)    # (B, H, 2)
         rdir = batch["route_direction"].to(device)  # (B,)
+        norm_m = batch["waypoint_norm_m"].to(device)  # (B,)
 
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
             out = model(obs, mp)
@@ -102,14 +178,26 @@ def _train_one_epoch(
 
         optimizer.zero_grad()
         total.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
         optimizer.step()
 
         for k, v in loss_dict.items():
             running[k] = running.get(k, 0.0) + v.item()
+        grad_norm_sum += grad_norm.item()
+
+        ade, fde = compute_ade_fde(out["waypoints"].float(), gt, norm_m)
+        ade_sum += ade.sum().item()
+        fde_sum += fde.sum().item()
+        n_samples += gt.shape[0]
 
     n = len(loader)
-    return {k: v / n for k, v in running.items()}
+    elapsed = time.perf_counter() - t0
+    result = {k: v / n for k, v in running.items()}
+    result["grad_norm"] = grad_norm_sum / n
+    result["ade_m"] = ade_sum / max(n_samples, 1)
+    result["fde_m"] = fde_sum / max(n_samples, 1)
+    result["samples_per_sec"] = n_samples / max(elapsed, 1e-9)
+    return result
 
 
 @torch.no_grad()
@@ -123,24 +211,45 @@ def _eval_one_epoch(
     """Run one validation epoch.
 
     Returns:
-        Dict of averaged loss components for the epoch (keys: ``loss/total``,
-        ``loss/waypoint``, ``loss/direction``, ``loss/progress``, ``loss/smooth``).
+        Dict of averaged loss components (``loss/total``, ``loss/waypoint``,
+        ``loss/direction``, ``loss/progress``, ``loss/smooth``) plus metric
+        keys ``ade_m``/``fde_m`` (overall, meters) and per-maneuver
+        ``ade_m/{label}``/``fde_m/{label}`` when maneuver labels exist.
     """
     model.eval()
     running: dict[str, float] = {}
+    ade_meter = StratifiedMeter()
+    fde_meter = StratifiedMeter()
+
     for batch in loader:
         obs  = batch["observations"].to(device)
         mp   = batch["map_image"].to(device)
         gt   = batch["gt_waypoints"].to(device)
         rdir = batch["route_direction"].to(device)
+        norm_m = batch["waypoint_norm_m"].to(device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
             out  = model(obs, mp)
             _, loss_dict = criterion(out["waypoints"], gt, rdir)
         for k, v in loss_dict.items():
             running[k] = running.get(k, 0.0) + v.item()
 
+        ade, fde = compute_ade_fde(out["waypoints"].float(), gt, norm_m)
+        ade_meter.update(ade.cpu(), batch["maneuver"])
+        fde_meter.update(fde.cpu(), batch["maneuver"])
+
     n = max(len(loader), 1)
-    return {k: v / n for k, v in running.items()}
+    result = {k: v / n for k, v in running.items()}
+
+    ade_means, fde_means = ade_meter.means(), fde_meter.means()
+    result["ade_m"] = ade_means.pop("all", float("nan"))
+    result["fde_m"] = fde_means.pop("all", float("nan"))
+    # Per-maneuver breakdown — skip if labels are absent (single "unknown" bucket)
+    if set(ade_means) != {"unknown"}:
+        for lab, v in ade_means.items():
+            result[f"ade_m/{lab}"] = v
+        for lab, v in fde_means.items():
+            result[f"fde_m/{lab}"] = v
+    return result
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -203,11 +312,24 @@ def main(cfg: DictConfig) -> None:
     if cfg.training.use_wandb and not _WANDB_AVAILABLE:
         log.warning("wandb not installed — logging disabled")
     if use_wandb:
+        run_name = cfg.training.get("wandb_run_name", None) or (
+            f"{cfg.decoder.type}-{cfg.loss.waypoint_type}"
+            f"{'-mapdrop' + str(cfg.model.get('map_dropout_p', 0.0)) if cfg.model.get('map_dropout_p', 0.0) else ''}"
+            f"{'-maponly' if cfg.model.get('disable_obs', False) else ''}"
+            f"{'-obsonly' if cfg.model.get('disable_map', False) else ''}"
+        )
         _wandb.init(
-            project=cfg.training.get("wandb_project", "dynav"),          
-            entity=cfg.training.get("wandb_entity", None),   
+            project=cfg.training.get("wandb_project", "dynav"),
+            entity=cfg.training.get("wandb_entity", None),
+            name=run_name,
+            tags=list(cfg.training.get("wandb_tags", [])) or None,
             config=OmegaConf.to_container(cfg, resolve=True),
         )
+        # Primary comparison metric across runs: val ADE in meters (lower=better)
+        _wandb.define_metric("val/ade_m", summary="min")
+        _wandb.define_metric("val/fde_m", summary="min")
+        _wandb.define_metric("val/total", summary="min")
+        _wandb.watch(model, log="gradients", log_freq=200)
 
     # ── AMP ────────────────────────────────────────────────────────────────────
     use_amp = cfg.training.get("amp", False) and device.type == "cuda"
@@ -231,7 +353,10 @@ def main(cfg: DictConfig) -> None:
             model.unfreeze_encoders()
             log.info(f"Epoch {epoch}: encoder backbone unfrozen")
 
-        train_losses = _train_one_epoch(model, train_loader, criterion, optimizer, device, use_amp)
+        train_losses = _train_one_epoch(
+            model, train_loader, criterion, optimizer, device, use_amp,
+            grad_clip_norm=cfg.training.get("grad_clip_norm", 1.0),
+        )
         val_losses   = _eval_one_epoch(model, val_loader, criterion, device, use_amp)
         val_loss     = val_losses["loss/total"]
 
@@ -242,16 +367,28 @@ def main(cfg: DictConfig) -> None:
             f"[{epoch:3d}/{cfg.training.epochs}] "
             f"train={train_losses['loss/total']:.4f}  "
             f"val={val_loss:.4f}  "
+            f"val_ade={val_losses['ade_m']:.2f}m  "
+            f"val_fde={val_losses['fde_m']:.2f}m  "
             f"lr={current_lr:.2e}"
         )
 
         if use_wandb:
-            _wandb.log({
+            log_dict = {
                 "epoch": epoch,
                 "lr":    current_lr,
-                **{f"train/{k.split('/')[1]}": v for k, v in train_losses.items()},
-                **{f"val/{k.split('/')[1]}": v for k, v in val_losses.items()},
-            })
+                **_flatten_metrics("train", train_losses),
+                **_flatten_metrics("val", val_losses),
+            }
+
+            viz_every = cfg.training.get("viz_every", 5)
+            if viz_every and (epoch + 1) % viz_every == 0:
+                fig = _trajectory_figure(model, val_loader, device)
+                if fig is not None:
+                    log_dict["val/trajectories"] = _wandb.Image(fig)
+                    import matplotlib.pyplot as plt
+                    plt.close(fig)
+
+            _wandb.log(log_dict)
 
         # Checkpoint state
         state = {

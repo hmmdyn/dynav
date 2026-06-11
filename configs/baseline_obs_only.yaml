@@ -1,0 +1,11 @@
+# @package _global_
+# Obs-only baseline — map tokens replaced by a learned null token.
+# Quantifies the map's contribution to the full model.
+# Usage: python scripts/train.py --config-name baseline_obs_only
+
+defaults:
+  - default
+  - _self_
+
+model:
+  disable_map: true

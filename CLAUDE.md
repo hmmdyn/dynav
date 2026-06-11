@@ -26,12 +26,17 @@ Two planned models:
 - **MapEncoder:** Map image → EfficientNet-B0 → GlobalAvgPool → Linear(1280, 256) → 1 token → `map_tokens ∈ (B, 1, 256)`.
   - Single-token GAP is noise-robust: GPS, heading, and path centerline errors all cause horizontal displacement in heading-up maps — GAP is invariant to such shifts.
 
+### Modality dropout / baseline flags (`DyNavModel._apply_modality_dropout`)
+- 학습 중 확률 p로 map(또는 obs) 토큰 전체를 **learned null token**으로 교체 — `model.map_dropout_p` / `model.obs_dropout_p` (0 = off).
+- `model.disable_map` / `model.disable_obs`: train·eval 모두 항상 null token 사용 → obs-only / map-only 베이스라인 (`baseline_obs_only.yaml` / `baseline_map_only.yaml`).
+
 ### Decoder
-- **SelfAttentionDecoder** (default): Cat(obs[4], map[1]) → Self-Attn → FFN × 4. 5-token sequence. Output: mean pool over obs positions → `context ∈ (B, 256)`.
+- **SelfAttentionDecoder** (default): Cat(obs[4], map[1]) → Self-Attn → FFN × 4 (pre-norm, custom layer — `nn.TransformerEncoderLayer`와 모듈명 동일해 구 체크포인트 호환). 5-token sequence. Output: mean pool over obs positions → `context ∈ (B, 256)`.
+  - `return_attention=True` → layer별 head-평균 full attention `(B, 5, 5)` 리스트 / `return_per_head=True` → `(B, n_heads, 5, 5)`.
 - **CrossAttentionDecoder** (ablation): Self-Attn(obs) → Cross-Attn(Q=obs, K/V=map) → FFN × 4. Output: mean pool → `context ∈ (B, 256)`.
 
 ### Action Head
-`WaypointHead`: Linear(256, 128) → ReLU → Linear(128, H×2) → tanh → reshape `(H, 2)`.  
+`WaypointHead`: Linear(256, 128) → ReLU → Linear(128, H×2) → **tanh** → reshape `(H, 2)`.  
 Output: H=5 relative waypoints (Δx, Δy) in robot body frame, bounded to [-1, 1] via tanh.
 
 ---
@@ -106,21 +111,23 @@ env var으로 오버라이드 가능: `DYNAV_FRODO_ROOT`, `DYNAV_DATASET_ROOT`, 
 ```
 L_total = L_waypoint + λ1·L_direction + λ2·L_progress + λ3·L_smooth
 
-L_waypoint  = (1/H) Σ ||â_i - a*_i||_p           # p=1(L1/MAE) or p=2(L2/MSE), config 선택
+L_waypoint  = (1/H) Σ ||â_i - a*_i||_p           # "l1"(MAE) / "l2"(MSE) / "huber"(smooth-L1, δ=loss.huber_delta)
 L_direction = 1 - cos(α̂, α*_route)               # route alignment
 L_progress  = -(1/H) Σ (â_i · d̂_route)           # progress incentive
 L_smooth    = (1/(H-1)) Σ ||â_{i+1} - â_i||²     # smoothness
 ```
 
-waypoint loss 종류(`loss.waypoint_type`: `"l1"`/`"l2"`), λ1·λ2·λ3, enable 플래그 값은 모두 **`configs/default.yaml`의 `loss.*`가 권위** (`waypoint_type`, `lambda_direction`/`lambda_progress`/`lambda_smooth`, `enable_direction`/`progress`/`smooth`). 이 문서는 수식 형태만 고정하고 수치·선택은 config를 따른다.
+waypoint loss 종류(`loss.waypoint_type`: `"l1"`/`"l2"`/`"huber"`), `huber_delta`, λ1·λ2·λ3, enable 플래그 값은 모두 **`configs/default.yaml`의 `loss.*`가 권위**. 이 문서는 수식 형태만 고정하고 수치·선택은 config를 따른다. (현 default: waypoint-only — 보조 loss는 `ablation_aux_losses.yaml`.)
 
 ## Training Loop (`scripts/train.py`)
 
-- **Optimizer/scheduler:** AdamW + linear warm-up → cosine decay. `lr`·`weight_decay`·`warmup_epochs`는 `configs/default.yaml`의 `training.*`가 권위.
+- **Optimizer/scheduler:** AdamW + linear warm-up → cosine decay. `lr`·`weight_decay`·`warmup_epochs`·`grad_clip_norm`은 `configs/default.yaml`의 `training.*`가 권위.
 - **Encoder freeze:** 첫 `encoder.freeze_epochs` 동안 backbone freeze 후 unfreeze.
-- **Validation:** `_eval_one_epoch`이 component별 평균 loss dict 반환 → WandB에 `val/{waypoint,direction,progress,smooth,total}` 기록 (train과 대칭).
+- **Metrics:** 정규화 val loss 외에 **ADE/FDE 미터 단위** (`dynav/utils/metrics.py`, meta의 `waypoint_norm_m`로 역정규화 — 구버전 meta는 `data.max_waypoint_distance` 폴백) + **maneuver별 stratified val** (`val/ade_m/{maneuver}`, frodo7k meta `labels.maneuver` 사용; 라벨 없는 데이터셋은 자동 생략).
+- **Validation:** `_eval_one_epoch`이 component별 평균 loss + ADE/FDE dict 반환 → WandB `val/*` 기록 (train과 대칭, train은 grad_norm·samples_per_sec 추가).
 - **Early stopping:** val total loss가 `training.early_stopping_patience` epoch 동안 개선되지 않으면 중단 (`0`이면 비활성). best는 `checkpoints/best.pt`.
 - **AMP:** `training.amp` + CUDA일 때 BF16 autocast.
+- **WandB:** run 이름 자동 생성(`{decoder}-{loss}[-mapdropP|-maponly|-obsonly]`, `wandb_run_name`으로 오버라이드), `wandb_tags`, `define_metric`으로 `val/ade_m`·`val/fde_m`·`val/total` min summary(런 간 비교 기준), gradient watch(log_freq=200), `viz_every` epoch마다 pred-vs-GT 궤적 figure(`val/trajectories`) 로깅.
 
 ---
 
@@ -312,10 +319,13 @@ rides0~4 기반 후처리 스크립트 수동 구동으로 필터링 → train 4
 
 | File | Effect |
 |------|--------|
+| `baseline_map_only.yaml` | `disable_obs: true` — 카메라 기여 검증 (map-shortcut 진단) |
+| `baseline_obs_only.yaml` | `disable_map: true` — 지도 기여 정량화 |
+| `ablation_aux_losses.yaml` | direction+smooth 활성 (구 기본값 복원) |
 | `ablation_map_hybrid.yaml` | `map.mode: "hybrid"` — 현재 미사용, 후속 연구용으로 보류 |
-| `ablation_no_direction.yaml` | `enable_direction: false` |
-| `ablation_no_progress.yaml` | `enable_progress: false` |
-| `ablation_waypoint_only.yaml` | all auxiliary losses off |
+| `ablation_no_direction.yaml` | `enable_direction: false` (default가 waypoint-only가 되면서 무의미 — 보존만) |
+| `ablation_no_progress.yaml` | `enable_progress: false` (동상) |
+| `ablation_waypoint_only.yaml` | all auxiliary losses off (= 현 default와 동일 — 보존만) |
 
 Usage: `python scripts/train.py --config-name ablation_no_direction`
 

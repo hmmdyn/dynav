@@ -1,0 +1,12 @@
+# @package _global_
+# Map-only baseline — obs tokens replaced by a learned null token.
+# Answers: does the camera actually contribute? If this matches the full
+# model, the policy is a "route-image → direction decoder", not a visual policy.
+# Usage: python scripts/train.py --config-name baseline_map_only
+
+defaults:
+  - default
+  - _self_
+
+model:
+  disable_obs: true

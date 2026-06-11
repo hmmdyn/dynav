@@ -17,16 +17,23 @@ def compute_waypoint_loss(
     pred_waypoints: torch.Tensor,
     gt_waypoints: torch.Tensor,
     loss_type: str = "l1",
+    huber_delta: float = 0.3,
 ) -> torch.Tensor:
     """Regression loss between predicted and ground-truth waypoints.
 
-    L_waypoint = (1/H) * Σ_i ||â_i - a*_i||₁   (loss_type="l1")
-               = (1/H) * Σ_i ||â_i - a*_i||²   (loss_type="l2", MSE)
+    L_waypoint = (1/H) * Σ_i ||â_i - a*_i||₁     (loss_type="l1")
+               = (1/H) * Σ_i ||â_i - a*_i||²     (loss_type="l2", MSE)
+               = (1/H) * Σ_i huber_δ(â_i - a*_i) (loss_type="huber")
+
+    Huber (smooth-L1): quadratic for |e| < δ, linear beyond — bounded gradient
+    on large errors so noisy GT labels (GPS-derived waypoints) do not dominate.
+    δ is in normalized waypoint space ([-1, 1]).
 
     Args:
         pred_waypoints: Predicted waypoints of shape (B, H, 2).
         gt_waypoints: Ground-truth waypoints of shape (B, H, 2).
-        loss_type: ``"l1"`` (MAE) or ``"l2"`` (MSE).
+        loss_type: ``"l1"`` (MAE), ``"l2"`` (MSE), or ``"huber"``.
+        huber_delta: Transition point δ for ``"huber"`` (normalized units).
 
     Returns:
         Scalar loss tensor.
@@ -36,7 +43,13 @@ def compute_waypoint_loss(
         return torch.abs(pred_waypoints - gt_waypoints).mean()
     if loss_type == "l2":
         return ((pred_waypoints - gt_waypoints) ** 2).mean()
-    raise ValueError(f"Unknown waypoint loss_type: '{loss_type}' (expected 'l1' or 'l2')")
+    if loss_type == "huber":
+        return torch.nn.functional.huber_loss(
+            pred_waypoints, gt_waypoints, delta=huber_delta
+        )
+    raise ValueError(
+        f"Unknown waypoint loss_type: '{loss_type}' (expected 'l1', 'l2', or 'huber')"
+    )
 
 
 def compute_direction_loss(
@@ -152,6 +165,7 @@ class NavigationLoss(nn.Module):
         self.lambda_progress: float  = cfg.loss.lambda_progress
         self.lambda_smooth: float    = cfg.loss.lambda_smooth
         self.waypoint_type: str      = cfg.loss.get("waypoint_type", "l1")
+        self.huber_delta: float      = cfg.loss.get("huber_delta", 0.3)
         self.enable_direction: bool  = cfg.loss.get("enable_direction", True)
         self.enable_progress: bool   = cfg.loss.get("enable_progress", True)
         self.enable_smooth: bool     = cfg.loss.get("enable_smooth", True)
@@ -176,7 +190,9 @@ class NavigationLoss(nn.Module):
                   ``"loss/waypoint"``, ``"loss/direction"``,
                   ``"loss/progress"``, ``"loss/smooth"`` for wandb logging.
         """
-        l_waypoint = compute_waypoint_loss(pred_waypoints, gt_waypoints, self.waypoint_type)
+        l_waypoint = compute_waypoint_loss(
+            pred_waypoints, gt_waypoints, self.waypoint_type, self.huber_delta
+        )
 
         zero = torch.tensor(0.0, device=pred_waypoints.device)
 

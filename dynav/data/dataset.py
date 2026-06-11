@@ -37,6 +37,9 @@ class DyNavDataset(Dataset):
             ``get_eval_transforms`` (no augmentation — map is deterministic).
         image_size: Resize target passed to default transforms when
             ``transform`` is None.
+        default_waypoint_norm_m: Fallback normalization radius (meters) for
+            samples whose meta.json predates the ``waypoint_norm_m`` field
+            (pre-frodo7k datasets used 2.5 m). Used to report ADE/FDE in meters.
     """
 
     _OBS_FILES = ["obs_0.png", "obs_1.png", "obs_2.png", "obs_3.png"]
@@ -50,7 +53,9 @@ class DyNavDataset(Dataset):
         transform=None,
         map_transform=None,
         image_size: int = 224,
+        default_waypoint_norm_m: float = 2.5,
     ) -> None:
+        self.default_waypoint_norm_m = default_waypoint_norm_m
         from dynav.data.transforms import (
             get_eval_transforms,
             get_map_train_transforms,
@@ -92,6 +97,10 @@ class DyNavDataset(Dataset):
                 - ``map_image``:    (3, H, W) float tensor.
                 - ``gt_waypoints``: (H, 2) float tensor, normalized to [-1, 1].
                 - ``route_direction``: scalar tensor (radians, body frame).
+                - ``waypoint_norm_m``: scalar tensor — normalization radius in
+                  meters (for de-normalizing metrics to ADE/FDE in m).
+                - ``maneuver``: str label for stratified metrics
+                  (``"unknown"`` if the dataset has no labels).
         """
         from PIL import Image  # lazy import — not needed for DummyDyNavDataset
 
@@ -112,10 +121,15 @@ class DyNavDataset(Dataset):
         gt_waypoints    = torch.tensor(meta["gt_waypoints"], dtype=torch.float32)
         route_direction = torch.tensor(meta["route_direction"], dtype=torch.float32)
 
+        norm_m   = meta.get("waypoint_norm_m", self.default_waypoint_norm_m)
+        maneuver = meta.get("labels", {}).get("maneuver", "unknown")
+
         return {
             "observations":    observations,     # (N_obs, 3, H, W)
             "map_image":       map_image,         # (3, H, W)
             "gt_waypoints":    gt_waypoints,      # (H, 2)
             "route_direction": route_direction,   # scalar
+            "waypoint_norm_m": torch.tensor(norm_m, dtype=torch.float32),  # scalar
+            "maneuver":        maneuver,          # str (collates to list[str])
         }
 

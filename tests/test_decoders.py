@@ -142,18 +142,46 @@ class TestSelfAttentionDecoder:
             f"Expected ({BATCH}, {TOKEN_DIM}), got {tuple(context.shape)}"
         )
 
-    def test_attention_always_none(
+    def test_attention_none_by_default(
         self,
         self_decoder: SelfAttentionDecoder,
         obs_tokens: torch.Tensor,
         map_tokens: torch.Tensor,
     ) -> None:
-        """SelfAttentionDecoder always returns None for attention (interface compat)."""
+        """No attention weights unless explicitly requested."""
         with torch.no_grad():
-            _, attn_true  = self_decoder(obs_tokens, map_tokens, return_attention=True)
-            _, attn_false = self_decoder(obs_tokens, map_tokens, return_attention=False)
-        assert attn_true  is None
-        assert attn_false is None
+            _, attn = self_decoder(obs_tokens, map_tokens, return_attention=False)
+        assert attn is None
+
+    def test_attention_weights_shape(
+        self,
+        self_decoder: SelfAttentionDecoder,
+        obs_tokens: torch.Tensor,
+        map_tokens: torch.Tensor,
+    ) -> None:
+        """return_attention → per-layer (B, N, N) full self-attention matrices."""
+        n_total = obs_tokens.shape[1] + map_tokens.shape[1]
+        with torch.no_grad():
+            _, attn = self_decoder(obs_tokens, map_tokens, return_attention=True)
+        assert isinstance(attn, list) and len(attn) == N_LAYERS
+        for w in attn:
+            assert w.shape == (BATCH, n_total, n_total)
+            # rows are softmax distributions
+            assert torch.allclose(w.sum(dim=-1), torch.ones(BATCH, n_total), atol=1e-5)
+
+    def test_attention_per_head_shape(
+        self,
+        self_decoder: SelfAttentionDecoder,
+        obs_tokens: torch.Tensor,
+        map_tokens: torch.Tensor,
+    ) -> None:
+        """return_per_head → per-layer (B, n_heads, N, N)."""
+        n_total = obs_tokens.shape[1] + map_tokens.shape[1]
+        with torch.no_grad():
+            _, attn = self_decoder(obs_tokens, map_tokens, return_per_head=True)
+        assert isinstance(attn, list) and len(attn) == N_LAYERS
+        for w in attn:
+            assert w.shape == (BATCH, N_HEADS, n_total, n_total)
 
     def test_drop_in_replacement_same_signature(
         self,
