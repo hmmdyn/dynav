@@ -211,7 +211,64 @@ route_dir = compute_route_direction(
 )  # returns radians in body frame
 ```
 
-### FrodoBots 데이터셋 빌드 파이프라인 (3단계)
+### FrodoBots-7k 데이터셋 빌드 파이프라인 (신규, `dynav/frodo7k/`)
+
+LeRobot v1.6 포맷(`dataset_cache.zarr` 164.7M frames @10fps, 187,156 episodes,
+39,856 rides, 224×128 front/rear video GOP=2)을 직접 소비한다. 구버전 3단계
+파이프라인을 대체한다.
+
+```
+python scripts/build_frodobots7k_dataset.py --stage index [--limit N | --episodes a:b]
+python scripts/build_frodobots7k_dataset.py --stage select
+python scripts/build_frodobots7k_dataset.py --stage build
+python scripts/build_frodobots7k_dataset.py --stage report
+```
+
+모든 임계값은 `configs/frodo7k.yaml`이 권위. 출력: `<output_root>/{index,train,val,report}`.
+
+**GT 기하 (구버전 waypoint 불일치의 해결):**
+- `observation.filtered_position` (EKF, 로컬 ENU m) + `observation.filtered_heading`
+  (rad, East 기준 CCW)에서 직접 산출. raw GPS 보간·±2s bearing 근사 미사용.
+- body frame: x=fwd=(cos h, sin h), y=left=(−sin h, cos h).
+  compass_deg = (90 − deg(h)) % 360.
+- waypoint: 1–5 s (frames [10..50] @10fps), meta에 정규화값(`waypoint_norm_m: 5.0`)과
+  raw 미터(`gt_waypoints_m`) 모두 저장. (기존 2.5 m 정규화는 5 s waypoint를 상시 클리핑했음.)
+
+**stage index** — 에피소드 → `refine_segments` (video ts 갭 >0.25 s·5 s 정지·EKF↔GPS
+발산으로 분할, 정지 head/tail 트림) → `segment_qa` 게이트 (arc·net_disp·speed·
+stationary·gps_dev_p95·**heading↔motion 일치**; straightness 게이트 없음 — 회전 데이터 보존)
+→ OSM 라우팅: `fetch_network_bbox` (`_DRIVE_PED_TAGS` 확장 태그 + 세그먼트 전체 bbox,
+0.005° 그리드 캐시) → **`route_by_graph` 그래프 길찾기** — 시작·골만 방향 인지 투영
+(데모 접선과 >50° 어긋난 엣지 배제 → 교차로 측면도로 오스냅 방지) 후 Dijkstra 1회,
+데모가 최단경로에서 >10 m 벗어난 지점에만 via-앵커(그래프 **노드** 스냅)를 재귀 삽입.
+근접 노드 2.5 m 스티칭(보도·차도 그래프 분절 해소) + 스퍼 제거 후처리.
+inference `/route`와 동일한 "도로 중심선 그래프 경로" 스타일 = train/inference 분포 일치.
+→ `route_qa` (snap dist·len ratio·**offroute gap**(데모에서 먼 장거리 점프만)·monotonic·
+tangent 방향 일치 ≤45°·**spike=0**) → scene 분류 (`fetch_scene_bbox`: 녹지 폴리곤 PIP
++ 건물 수 `out count` → park/city/straight_road/other) → `candidate_indices`
+(직진 stride 20 / 회전 stride 5) → `classify_candidates` (maneuver 6종·
+near_intersection·env_density·scene·difficulty). 에피소드당 JSON 1개, resumable.
+
+**stage select** — ride md5 해시 train/val 분할(샘플 누수 방지) → `select_balanced`:
+**(maneuver × scene) 2축 쿼터** (`maneuver_targets` × `scene_targets`) + 세그먼트당 캡.
+부족 셀은 같은 maneuver 행 내 재분배 → 전역 재분배. `selection_stats.json`에 기록.
+
+**stage build** — PyAV로 에피소드당 1회 디코드 → obs_0..3 (0.5 s stride) +
+`MapRenderer` (heading-up, 경로는 로봇의 **폴리라인 투영점**부터 슬라이스 — 그래프
+경로는 정점이 희소하므로 정점 거리가 아닌 `_project_to_polyline` 세그먼트 투영 필수).
+샘플 게이트: `wp_backward`, `robot_far_from_route`(폴리라인 거리 >15 m),
+`route_wp_conflict`(GT 진행방향↔경로방향 >75° — OSM에 없는 골목 주행 등 지도·GT 모순 샘플 제거).
+meta에 `route_lateral_m`(로봇↔경로 오프셋) 기록.
+출력 포맷은 DyNavDataset과 동일(`obs_0..3.png, map.png, meta.json`) + meta에 라벨·QA 전부 포함.
+
+**inference 계약 (이탈 대응)** — policy는 lateral offset ≤15 m 범위에서만 동작을
+보장한다(학습 게이트와 동일). ROS 노드는 경로 이탈 ~12 m가 지속되면 현재위치→골을
+재라우팅한다. 소·중간 오프셋 복귀는 자연 데이터(lateral med ~3 m, p90 ~7 m) +
+학습 시 map augmentation(RandomAffine 이동·회전 = GPS/heading 오차 시뮬레이션)이 커버.
+
+**stage report** — `report.md` + contact sheet (obs|map+waypoint 오버레이) + 구성 통계.
+
+### (구) FrodoBots 데이터셋 빌드 파이프라인 (3단계, deprecated — rides0~4 CSV 입력 전용)
 
 **Step 1 — 세그먼트 추출** (`extract_frodobots_segments.py`):
 ```

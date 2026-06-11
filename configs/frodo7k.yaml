@@ -1,0 +1,97 @@
+# configs/frodo7k.yaml — FrodoBots-7k (LeRobot v1.6) dataset build.
+#
+# Single source of truth for every threshold in the new pipeline.
+# scripts/build_frodobots7k_dataset.py --config configs/frodo7k.yaml
+
+paths:
+  frodo7k_root: "/media/hmmdyn/MoAI Nav/frodobots_dataset"   # zarr + videos
+  output_root:  "/media/hmmdyn/MoAI Nav/dynav_frodo7k"       # index/ train/ val/ report/
+  tile_cache:   "/media/hmmdyn/MoAI Nav/dynav_frodo7k/osm_tile_cache"
+  osm_cache:    "/media/hmmdyn/MoAI Nav/dynav_frodo7k/osm_net_cache"
+
+# ── sample geometry (10 fps source) ──────────────────────────────────────────
+sample:
+  obs_stride: 5            # frames between obs images (0.5 s)
+  n_obs: 4                 # obs_0 (current) + 3 past
+  wp_offsets: [10, 20, 30, 40, 50]   # waypoint horizon, frames (1–5 s)
+  waypoint_norm_m: 5.0     # normalization radius; raw metres also stored
+  route_lookahead_m: 10.0  # route_direction target distance
+  route_wp_max_deg: 75.0   # drop samples whose GT motion contradicts the map route
+  image_size: 224
+  obs_resize: "stretch"    # "stretch" (legacy-compatible) | "letterbox"
+
+# ── episode/segment QA gates (dynav/frodo7k/qa.py::QAConfig) ─────────────────
+qa:
+  video_gap_s: 0.25
+  stop_speed_ms: 0.15
+  stop_split_s: 5.0
+  gps_dev_split_m: 15.0
+  min_frames: 145
+  min_arc_m: 20.0
+  min_net_disp_m: 8.0
+  min_speed_ms: 0.25
+  max_stationary_frac: 0.35
+  max_gps_dev_p95_m: 10.0
+  max_heading_err_med_rad: 0.30
+  max_speed_ms: 2.5
+
+# ── OSM route QA ─────────────────────────────────────────────────────────────
+route:
+  snap_subsample: 5        # snap every Nth trajectory frame (speed)
+  # graph wayfinding (route_by_graph): one Dijkstra path to the segment goal,
+  # via-anchors only where the demo leaves it — same style as inference /route
+  max_route_dev_m: 10.0    # demo↔route deviation that triggers a via-anchor
+  max_anchors: 12          # beyond this the demo doesn't follow mapped roads
+  max_edge_angle_deg: 50.0 # direction-compatible projection (no side-street snap)
+  max_snap_mean_m: 8.0
+  len_ratio_range: [0.6, 1.8]
+  max_gap_m: 30.0
+  min_monotonic_frac: 0.8
+  max_dir_agree_med_deg: 45.0   # traj↔route tangent agreement gate
+
+# ── candidate enumeration / labelling ────────────────────────────────────────
+candidates:
+  base_stride: 20          # 2 s between samples on straights
+  turn_stride: 5           # 0.5 s where |heading rate| > turn_rate_deg_s
+  turn_rate_deg_s: 12.0
+  intersection_radius_m: 15.0
+  intersection_lookahead_m: 20.0
+  urban_way_density: 400.0   # ways/km² ≥ → urban
+  sparse_way_density: 60.0   # ways/km² < → sparse
+  # scene classification (segment-level; priority park > city > straight_road)
+  park_inside_frac: 0.5            # traj fraction inside green polygons → park
+  city_building_per_km2: 800.0     # building ways/km² ≥ → city
+  straight_min_ratio: 0.9          # net_disp/arc ≥ → straight_road candidate
+  straight_max_turn_deg_per_m: 3.0 # turn_total/arc ≤ → straight_road
+
+# ── stratified selection ─────────────────────────────────────────────────────
+select:
+  target_train: 30000
+  target_val: 3000
+  val_fraction: 0.1        # ride-level hash split
+  max_per_segment: 60
+  maneuver_targets:        # fractions are renormalized; "slight"/"turn" merge L+R
+    straight: 0.35
+    slight: 0.20
+    turn: 0.33
+    uturn: 0.12
+  scene_targets:           # 2nd quota axis; shortfall redistributed within
+    city: 0.45             # the same maneuver row first, then globally
+    park: 0.20
+    straight_road: 0.20
+    other: 0.15
+  seed: 0
+
+# ── map rendering (visuals shared with configs/map.yaml) ─────────────────────
+map:
+  tile_url: "https://basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}.png"
+  tile_zoom: 19
+  render_size: 512
+  output_size: 224
+  mode: "rgb"
+  crop_ratio: 0.7
+
+# ── report ───────────────────────────────────────────────────────────────────
+report:
+  contact_sheet_samples: 64
+  gif_segments: 12
