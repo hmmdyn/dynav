@@ -131,10 +131,11 @@ class TestModalityDropout:
         cfg.decoder.dropout = 0.0   # remove stochastic layers for determinism
         model = DyNavModel.from_config(cfg).train()
         obs, mp = _make_inputs()
+        mp2 = torch.randn_like(mp)  # create BEFORE seeding — randn consumes RNG
         torch.manual_seed(0)
         w1 = model(obs, mp)["waypoints"]
-        torch.manual_seed(0)
-        w2 = model(obs, torch.randn_like(mp))["waypoints"]
+        torch.manual_seed(0)        # same RNG for stochastic depth in encoders
+        w2 = model(obs, mp2)["waypoints"]
         assert torch.allclose(w1, w2)
 
 
@@ -213,8 +214,10 @@ class TestBackwardPass:
         loss = out["waypoints"].sum()
         loss.backward()
 
+        # Null tokens only enter the graph when modality dropout/disable is active
+        unused_ok = {"map_null_token", "obs_null_token"}
         for name, param in model.named_parameters():
-            if param.requires_grad:
+            if param.requires_grad and name not in unused_ok:
                 assert param.grad is not None, f"No gradient for {name}"
 
     def test_invalid_decoder_type_raises(self) -> None:

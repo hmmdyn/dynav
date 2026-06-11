@@ -161,6 +161,7 @@ class TestSelfAttentionDecoder:
     ) -> None:
         """return_attention → per-layer (B, N, N) full self-attention matrices."""
         n_total = obs_tokens.shape[1] + map_tokens.shape[1]
+        self_decoder.eval()   # train mode applies dropout to returned weights
         with torch.no_grad():
             _, attn = self_decoder(obs_tokens, map_tokens, return_attention=True)
         assert isinstance(attn, list) and len(attn) == N_LAYERS
@@ -177,6 +178,7 @@ class TestSelfAttentionDecoder:
     ) -> None:
         """return_per_head → per-layer (B, n_heads, N, N)."""
         n_total = obs_tokens.shape[1] + map_tokens.shape[1]
+        self_decoder.eval()
         with torch.no_grad():
             _, attn = self_decoder(obs_tokens, map_tokens, return_per_head=True)
         assert isinstance(attn, list) and len(attn) == N_LAYERS

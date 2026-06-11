@@ -95,7 +95,7 @@ class TestWaypointLoss:
         pred = torch.randn(B, H, 2)
         gt   = torch.randn(B, H, 2)
         with pytest.raises(ValueError):
-            compute_waypoint_loss(pred, gt, loss_type="huber")
+            compute_waypoint_loss(pred, gt, loss_type="l3")
 
 
 # ── compute_direction_loss ─────────────────────────────────────────────────────

@@ -155,16 +155,21 @@ def segment_gps_episode(
         result: list[list[tuple[tuple[float, float], float]]] = []
         current: list[tuple[tuple[float, float], float]] = [seg[0]]
         start_ll = seg[0][0]
+        has_left = False   # must leave the radius before re-entry counts as a loop
 
         for item in seg[1:]:
             ll, ts = item
             dist_to_start = _haversine_m(*ll, *start_ll)
-            if dist_to_start <= loop_radius_m and len(current) > 5:
+            if dist_to_start > loop_radius_m:
+                has_left = True
+                current.append(item)
+            elif has_left and len(current) > 5:
                 # Robot returned to start — close segment
                 current.append(item)
                 result.append(current)
                 current = [item]
                 start_ll = ll
+                has_left = False
             else:
                 current.append(item)
 

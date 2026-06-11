@@ -231,9 +231,10 @@ class TestOSRMRouter:
         assert not is_route_valid(matched, gps, threshold_m=10.0)
 
     def test_find_current_idx(self):
+        """Returns the index of the *closest* route point (docstring contract)."""
         route = [(37.288 + i * 0.0001, 126.976) for i in range(10)]
         idx = find_current_idx(route, (37.2885, 126.976))
-        assert idx in (0, 1)
+        assert idx == 5
 
     def test_find_current_idx_empty(self):
         assert find_current_idx([], (37.0, 126.0)) == 0
@@ -285,11 +286,12 @@ class TestSegment:
         assert segs == []
 
     def test_ends_on_loop(self):
-        # Robot goes 20 steps north then returns to start
-        n = 20
-        latlons = [(37.288 + i * 0.00010, 126.976) for i in range(n)]
+        # Robot walks 30 steps north (~1.1 m/step, below the 5 m jump
+        # threshold), leaves the 15 m loop radius, then returns to start
+        n = 30
+        latlons = [(37.288 + i * 0.00001, 126.976) for i in range(n)]
         # Add return leg
-        latlons += [(37.288 + (n - i) * 0.00010, 126.976) for i in range(1, n + 1)]
+        latlons += [(37.288 + (n - i) * 0.00001, 126.976) for i in range(1, n + 1)]
         ts = [float(i) for i in range(len(latlons))]
         segs = segment_gps_episode(latlons, ts, loop_radius_m=15.0, min_length_m=5.0)
         # The loop back should trigger a segment break
