@@ -106,11 +106,18 @@ class DyNavDataset(Dataset):
 
         sample_dir = self.samples[idx]
 
-        obs_tensors = []
-        for fname in self._OBS_FILES:
-            img = Image.open(sample_dir / fname).convert("RGB")
-            obs_tensors.append(self.transform(img))              # (3, H, W)
-        observations = torch.stack(obs_tensors, dim=0)           # (N_obs, 3, H, W)
+        obs_pils = [
+            Image.open(sample_dir / fname).convert("RGB")
+            for fname in self._OBS_FILES
+        ]
+        if getattr(self.transform, "consistent_sequence", False):
+            # one augmentation sampled per sample, applied to all frames —
+            # preserves inter-frame motion (ego-speed signal)
+            observations = self.transform(obs_pils)              # (N_obs, 3, H, W)
+        else:
+            observations = torch.stack(
+                [self.transform(img) for img in obs_pils], dim=0
+            )                                                    # (N_obs, 3, H, W)
 
         map_pil  = Image.open(sample_dir / self._MAP_FILE).convert("RGB")
         map_image = self.map_transform(map_pil)                  # (3, H, W)
