@@ -8,7 +8,7 @@ defaults:
   - _self_
 
 model:
-  map_dropout_p: 0.25               # map-shortcut 방지 — sweep {0.1, 0.25, 0.5}
+  map_dropout_p: 0.1                # map-shortcut 방지. 0.25는 uturn 학습 저해 — 2026-06-12 sweep: 0.1이 무노이즈·노이즈 전 구간 우세
 
 training:
   batch_size: 128                   # ~243 steps/epoch @ 31k samples, 32GB VRAM 여유

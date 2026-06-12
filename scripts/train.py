@@ -346,9 +346,14 @@ def main(cfg: DictConfig) -> None:
     if use_amp:
         log.info("AMP enabled: BF16 autocast")
 
-    # ── Output dir (Hydra sets cwd to outputs/<date>/<time>/) ──────────────────
-    ckpt_dir = Path("checkpoints")
-    ckpt_dir.mkdir(exist_ok=True)
+    # ── Output dir ──────────────────────────────────────────────────────────────
+    # hydra.job.chdir is unset (>=1.2 default: no chdir), so a cwd-relative path
+    # would land in the repo root and be overwritten by every subsequent run.
+    # Resolve against the per-run output dir: outputs/<date>/<time>/checkpoints/.
+    from hydra.core.hydra_config import HydraConfig
+    ckpt_dir = Path(HydraConfig.get().runtime.output_dir) / "checkpoints"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    log.info(f"Checkpoints → {ckpt_dir}")
 
     best_val_loss = math.inf
     save_every    = cfg.training.save_every
