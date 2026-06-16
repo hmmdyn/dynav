@@ -6,15 +6,15 @@
 
 ## Runs
 
-| run id | 설정 | 결과 | 체크포인트 |
-|--------|------|------|-----------|
-| jk0u5d4i | — | 즉시 종료 (크래시) | 없음 |
-| dgnfxbhw | — | 즉시 종료 (크래시) | 없음 |
-| zk7cqqj2 | full#1 | 비정상 (env 문제 추정) | 없음 |
-| wiizgrmh | map-only | ADE 0.637 / turn 0.803/0.828 / uturn 0.872 | **유실** (저장 경로 버그) |
-| b83cpx5e | full#? | — | **유실** |
-| 9c2aqmej | full#2 | best ep6: ADE 0.618 / turn 0.781/0.788 / **uturn 0.889** | ep14만 생존 (ADE 0.642) |
-| pkx580d9 | obs-only#2 | (컨트롤) | **생존** → `checkpoints_recovered/obs_only_pkx580d9_best.pt` |
+| run id   | 설정         | 결과                                                       | 체크포인트                                                      |
+| -------- | ---------- | -------------------------------------------------------- | ---------------------------------------------------------- |
+| jk0u5d4i | —          | 즉시 종료 (크래시)                                              | 없음                                                         |
+| dgnfxbhw | —          | 즉시 종료 (크래시)                                              | 없음                                                         |
+| zk7cqqj2 | full#1     | 비정상 (env 문제 추정)                                          | 없음                                                         |
+| wiizgrmh | map-only   | ADE 0.637 / turn 0.803/0.828 / uturn 0.872               | **유실** (저장 경로 버그)                                          |
+| b83cpx5e | full#?     | —                                                        | **유실**                                                     |
+| 9c2aqmej | full#2     | best ep6: ADE 0.618 / turn 0.781/0.788 / **uturn 0.889** | ep14만 생존 (ADE 0.642)                                       |
+| pkx580d9 | obs-only#2 | (컨트롤)                                                    | **생존** → `checkpoints_recovered/obs_only_pkx580d9_best.pt` |
 
 ## 이슈
 

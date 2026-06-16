@@ -8,12 +8,12 @@
 
 ## Runs
 
-| run id | 설정 | 목적 | ADE↓ | turn↓ | uturn↓ | 체크포인트 |
-|--------|------|------|------|-------|--------|-----------|
-| yxmz09i0 | map-only, mapdrop=0.25 | wiizgrmh 재학습 (유실 복구) | 0.644 | 0.799/0.842 | 0.851 | `outputs/12-17-59/` best |
-| qdwvcsgb | full, mapdrop=0.1 | 실험 2 1차 시도 | — | — | — | 없음 (터미널 종료) |
-| u8p6ssmi | full, mapdrop=0.1 | 실험 2 · **채택 기준선** | **0.610** | 0.781/0.774 | **0.849** | `outputs/13-24-05/` best |
-| y1o15cj5 | full, mapdrop=0.1, tokens=9 | 실험 3 (GAP vs 9tokens) | 0.610 | 0.770/0.773 | 0.888 | `outputs/14-58-46/` best |
+| run id   | 설정                          | 목적                    | ADE↓      | turn↓       | uturn↓    | 체크포인트                    |
+| -------- | --------------------------- | --------------------- | --------- | ----------- | --------- | ------------------------ |
+| yxmz09i0 | map-only, mapdrop=0.25      | wiizgrmh 재학습 (유실 복구)  | 0.644     | 0.799/0.842 | 0.851     | `outputs/12-17-59/` best |
+| qdwvcsgb | full, mapdrop=0.1           | 실험 2 1차 시도            | —         | —           | —         | 없음 (터미널 종료)              |
+| u8p6ssmi | full, mapdrop=0.1           | 실험 2 · **채택 기준선**     | **0.610** | 0.781/0.774 | **0.849** | `outputs/13-24-05/` best |
+| y1o15cj5 | full, mapdrop=0.1, tokens=9 | 실험 3 (GAP vs 9tokens) | 0.610     | 0.770/0.773 | 0.888     | `outputs/14-58-46/` best |
 
 _obs-only 컨트롤: pkx580d9 (2026-06-11 복구본), val ADE 0.713 (노이즈 불변)_
 
