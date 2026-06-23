@@ -23,7 +23,7 @@ training:
   num_workers: 12
   use_wandb: true
   wandb_project: "dynav"
-  wandb_entity: null                # null → wandb default entity
+  wandb_entity: hmmdyn              # dynav 프로젝트 소유 entity (default entity 'models'는 쓰기 권한 없음)
   wandb_tags: ["frodo7k", "main"]
   viz_every: 5                      # 궤적 figure 로깅 주기
   amp: true                         # BF16 autocast — Blackwell architecture
